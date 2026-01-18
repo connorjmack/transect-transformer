@@ -60,6 +60,15 @@ python predict.py --input data/new_site/ --checkpoint checkpoints/best.pt --outp
 
 ### Data Preprocessing
 ```bash
+# Extract transects from LiDAR using predefined transect lines (shapefile)
+python scripts/extract_transects.py \
+    --transects data/mops/transects_10m/transect_lines.shp \
+    --las-dir data/raw/lidar/ \
+    --output data/processed/transects.npz \
+    --buffer 1.0 \
+    --n-points 128 \
+    --visualize
+
 # Download wave data
 python scripts/download_wave_data.py --buoy_id 100 --start_date 2023-01-01 --end_date 2024-01-01
 
@@ -75,9 +84,11 @@ python scripts/prepare_dataset.py --lidar_dir data/raw/lidar/ --output data/proc
 ### Model Components
 
 1. **TransectEncoder** (`src/models/transect_encoder.py`): Self-attention encoder for cliff geometry
-   - Processes N=128 points per transect with features: elevation, slope, curvature, roughness, aspect
+   - Processes N=128 points per transect with 12 features from `ShapefileTransectExtractor`
+   - Core geometric features: distance_m, elevation_m, slope_deg, curvature, roughness
+   - LAS attributes: intensity, RGB, classification, return_number, num_returns
    - Uses distance-based sinusoidal positional encoding (not index-based)
-   - Embeds transect-level metadata (cliff height, mean slope, orientation, etc.) and broadcasts to all points
+   - Embeds transect-level metadata (12 fields) and broadcasts to all points
    - Returns per-point embeddings and a pooled representation via learnable CLS token
 
 2. **EnvironmentalEncoder** (`src/models/environmental_encoder.py`): Time-series encoder for forcing data
@@ -112,11 +123,24 @@ python scripts/prepare_dataset.py --lidar_dir data/raw/lidar/ --output data/proc
 - **Attention for interpretability**: Cross-attention weights identify which storms/events matter for predictions
 - **Multi-task learning**: Shared encoder backbone with task-specific heads and weighted loss combination
 
+### Data Components
+
+1. **ShapefileTransectExtractor** (`src/data/shapefile_transect_extractor.py`): Transect extraction from LiDAR
+   - Uses predefined transect lines from a shapefile (e.g., MOPS transects)
+   - Extracts points within buffer distance, projects onto transect line
+   - Resamples to N=128 points with 12 features per point
+   - **Point features (12)**: distance_m, elevation_m, slope_deg, curvature, roughness, intensity, red, green, blue, classification, return_number, num_returns
+   - **Metadata (12)**: cliff_height_m, mean_slope_deg, max_slope_deg, toe_elevation_m, top_elevation_m, orientation_deg, transect_length_m, latitude, longitude, transect_id, mean_intensity, dominant_class
+
+2. **TransectVoxelizer** (`src/data/transect_voxelizer.py`): Alternative voxel-based extraction (unused)
+   - Bins points along transect into 1D segments
+   - More robust to variable point density but currently not used
+
 ### Data Flow
 
 ```
 Inputs:
-  - Transect: (B, N, 5) point features + (B, 7) metadata + (B, N) distances
+  - Transect: (B, N, 12) point features + (B, 12) metadata + (B, N) distances
   - Wave: (B, T_w, 4) features + (B, T_w) day-of-year
   - Precip: (B, T_p, 2) features + (B, T_p) day-of-year
 
@@ -165,8 +189,10 @@ def compute_risk_index(retreat_m_yr: float, cliff_height_m: float) -> float:
 Sigmoid-normalized, centered at 1 m/yr retreat. Taller cliffs amplify risk.
 
 ### Data Processing Conventions
-- **Transect resampling**: Always N=128 points, uniformly spaced along shore-normal profile
-- **Elevation normalization**: Set cliff toe as origin (toe_elevation = 0)
+- **Transect extraction**: Use `ShapefileTransectExtractor` with predefined transect lines from shapefile
+- **Transect resampling**: Always N=128 points, uniformly spaced along transect profile
+- **Buffer distance**: Default 1.0m around transect line for point collection
+- **Feature normalization**: Intensity and RGB normalized to [0,1], classification as discrete codes
 - **Wave timesteps**: 6-hourly for capturing storm dynamics
 - **Precip timesteps**: Daily for antecedent moisture
 - **Missing data**: Interpolate or flag - never silently fill with zeros

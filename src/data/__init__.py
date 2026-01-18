@@ -1,5 +1,5 @@
 """Data loading and preprocessing utilities."""
 
-from src.data.transect_extractor import TransectExtractor
+from src.data.shapefile_transect_extractor import ShapefileTransectExtractor
 
-__all__ = ["TransectExtractor"]
+__all__ = ["ShapefileTransectExtractor"]

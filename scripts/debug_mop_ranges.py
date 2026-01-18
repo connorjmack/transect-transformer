@@ -28,15 +28,49 @@ def analyze_ranges(shapefile_path):
             max_found = region['tr_id'].max()
             print(f"  Found IDs: {min_found} to {max_found}")
             
-            # Middle transect logic
-            target_mid = (start_id + end_id) / 2
-            # Find closest
-            region['diff'] = (region['tr_id'] - target_mid).abs()
-            mid_tr = region.loc[region['diff'].idxmin()]
-            print(f"  Middle Transect ID: {mid_tr['tr_id']}")
-        else:
-            print("  NO DATA FOUND")
+    
+            
+    # Check for duplicates
+            
+    if gdf['tr_id'].nunique() != len(gdf):
+            
+        print(f"\nWARNING: tr_id is not unique! Unique IDs: {gdf['tr_id'].nunique()}, Total rows: {len(gdf)}")
+            
+        
+            
+        # Check a sample duplicate
+            
+        counts = gdf['tr_id'].value_counts()
+            
+        dup_id = counts.index[0]
+            
+        print(f"Sample duplicate ID: {dup_id} (count: {counts[dup_id]})")
+            
+        
+            
+                dups = gdf[gdf['tr_id'] == dup_id]
+            
+        
+            
+                print("Geometries and Labels for sample duplicate:")
+            
+        
+            
+                for idx, row in dups.iterrows():
+            
+        
+            
+                    print(f"  {idx}: Label='{row['label']}', Geom={row.geometry}")
+            
+        
+            
+                    
+            
+        
+            
+            print(f"Geometry types: {gdf.geom_type.unique()}")
+            
 
-if __name__ == "__main__":
-    analyze_ranges("data/mops/transects_10m/transect_lines.shp")
+            
+if __name__ == "__main__":    analyze_ranges("data/mops/transects_10m/transect_lines.shp")
 

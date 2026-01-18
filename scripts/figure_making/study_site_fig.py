@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
 
 def utm_crs_for_geometries(gdf: gpd.GeoDataFrame) -> CRS:
     """Choose a suitable projected CRS (UTM) based on the data centroid."""
-    centroid_lonlat = gdf.to_crs(4326).geometry.unary_union.centroid
+    centroid_lonlat = gdf.to_crs(4326).geometry.union_all().centroid
     lon, lat = centroid_lonlat.x, centroid_lonlat.y
     zone = int((lon + 180) // 6) + 1
     epsg = (32600 if lat >= 0 else 32700) + zone
@@ -366,8 +366,8 @@ def annotate_regions(ax: plt.Axes, gdf: gpd.GeoDataFrame) -> None:
             boundaries.plot(ax=ax, color="black", linewidth=2.5, zorder=5)
 
         # Place label at the centroid of the region
-        # Use unary_union to get the combined geometry of all lines in the region
-        combined_geom = region.geometry.unary_union
+        # Use union_all() to get the combined geometry of all lines in the region
+        combined_geom = region.geometry.union_all()
         centroid = combined_geom.centroid
         
         # Add text with halo for visibility

@@ -230,7 +230,8 @@ def add_satellite_basemap(
     if zoom_guess is not None:
         bounds_kwargs["zoom"] = int(zoom_guess)
 
-    img, _ = ctx.bounds2img(minx, miny, maxx, maxy, **bounds_kwargs)
+    img, ext = ctx.bounds2img(minx, miny, maxx, maxy, **bounds_kwargs)
+    actual_bounds = (ext[0], ext[1], ext[2], ext[3])
 
     if rotation_angle % 90 != 0:
         warnings.warn("Basemap rotation supports 90° increments; skipping rotation.", stacklevel=2)
@@ -240,9 +241,9 @@ def add_satellite_basemap(
 
     if k:
         img = np.rot90(img, k=k)
-        extent = rotate_bounds(bounds, rotation_angle, origin=rotation_center)
+        extent = rotate_bounds(actual_bounds, rotation_angle, origin=rotation_center)
     else:
-        extent = (minx, maxx, miny, maxy)
+        extent = actual_bounds
 
     ax.imshow(
         img, extent=(extent[0], extent[1], extent[2], extent[3]), origin="upper", zorder=0, alpha=0.9

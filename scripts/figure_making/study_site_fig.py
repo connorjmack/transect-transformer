@@ -15,11 +15,22 @@ import warnings
 
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 import numpy as np
 from matplotlib.patches import Rectangle
 from pyproj import CRS
 from shapely import affinity
 from shapely.geometry import box
+
+# Define study site regions by MOP ID ranges (inclusive)
+MOP_RANGES = {
+    "DelMar": [595, 620],
+    "Solana": [637, 666],
+    "Encinitas": [708, 764],
+    "SanElijo": [683, 708],
+    "Torrey": [567, 581],
+    "Blacks": [520, 567],
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -316,6 +327,10 @@ def plot_study_site(
         gdf_rot.plot(ax=ax, color="#1f3c5b", linewidth=1.6)
     else:
         gdf_rot.plot(ax=ax, color="#1f3c5b", markersize=30, alpha=0.9)
+    
+    # Annotate specific regions if tr_id is present
+    if "tr_id" in gdf_rot.columns:
+        annotate_regions(ax, gdf_rot)
 
     ax.set_xlim(rotated_bounds[0], rotated_bounds[1])
     ax.set_ylim(rotated_bounds[2], rotated_bounds[3])
@@ -334,6 +349,40 @@ def plot_study_site(
     fig.tight_layout()
     fig.savefig(output, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
+
+
+def annotate_regions(ax: plt.Axes, gdf: gpd.GeoDataFrame) -> None:
+    """Annotate regions and delineate boundaries based on MOP_RANGES."""
+    for name, (start_id, end_id) in MOP_RANGES.items():
+        # Filter for the region
+        region = gdf[(gdf["tr_id"] >= start_id) & (gdf["tr_id"] <= end_id)]
+        if region.empty:
+            continue
+
+        # Delineate boundaries (start and end transects)
+        # Note: We look for the exact start/end ID in the data. If missing, we pick the closest available extremum.
+        boundaries = region[region["tr_id"].isin([start_id, end_id])]
+        if not boundaries.empty:
+            boundaries.plot(ax=ax, color="black", linewidth=2.5, zorder=5)
+
+        # Place label at the centroid of the region
+        # Use unary_union to get the combined geometry of all lines in the region
+        combined_geom = region.geometry.unary_union
+        centroid = combined_geom.centroid
+        
+        # Add text with halo for visibility
+        txt = ax.text(
+            centroid.x,
+            centroid.y,
+            name,
+            ha="center",
+            va="center",
+            fontsize=10,
+            fontweight="bold",
+            color="black",
+            zorder=10
+        )
+        txt.set_path_effects([pe.withStroke(linewidth=3, foreground="white", alpha=0.8)])
 
 
 def main() -> None:

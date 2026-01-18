@@ -1,0 +1,95 @@
+# Phase 2 Configuration: Risk Index + Expected Retreat
+# Adds second regression head
+
+# Model architecture
+model:
+  d_model: 256
+  n_heads: 8
+  n_layers_transect: 4
+  n_layers_env: 3
+  n_layers_fusion: 2
+  dropout: 0.1
+
+  # Input dimensions
+  n_point_features: 5
+  n_meta_features: 7
+  n_wave_features: 4
+  n_precip_features: 2
+
+  # Prediction heads - risk + retreat
+  enable_risk: true
+  enable_retreat: true
+  enable_collapse: false
+  enable_failure_mode: false
+
+# Data
+data:
+  n_transect_points: 128
+  wave_history_days: 90
+  wave_timestep_hours: 6
+  precip_history_days: 90
+  precip_timestep_hours: 24
+  normalize_elevation: true
+  normalize_to_toe: true
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  seed: 42
+
+# Training
+training:
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  max_epochs: 100
+  warmup_epochs: 5
+  gradient_clip_val: 1.0
+  use_amp: true
+
+  # Loss weights - risk + retreat
+  loss_weight_risk: 1.0
+  loss_weight_retreat: 1.0
+  loss_weight_collapse: 0.0
+  loss_weight_mode: 0.0
+
+  # Early stopping
+  early_stopping_patience: 15
+  early_stopping_metric: val_loss
+  early_stopping_mode: min
+
+  # Checkpointing
+  save_top_k: 3
+  checkpoint_metric: val_loss
+  checkpoint_mode: min
+
+  # Scheduler
+  scheduler: cosine
+  min_lr: 1.0e-6
+
+# Logging
+logging:
+  project_name: cliffcast_phase2
+  log_every_n_steps: 10
+  log_dir: logs
+  use_wandb: true
+  wandb_entity: null
+  wandb_project: cliffcast_phase2
+  log_attention_maps: true
+  log_predictions: true
+  log_freq_epochs: 5
+
+# Evaluation
+evaluation:
+  compute_r2: true
+  compute_mae: true
+  compute_rmse: true
+  compute_auc: false
+  compute_calibration: false
+  calibration_bins: 10
+
+# Paths
+paths:
+  data_dir: data/processed
+  checkpoint_dir: checkpoints/phase2
+  output_dir: outputs/phase2
+  results_dir: results/phase2

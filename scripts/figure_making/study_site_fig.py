@@ -8,6 +8,7 @@ basemap, legend, north arrow, and scale bar, and writes to results/figures by de
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Tuple
 import warnings
@@ -200,6 +201,27 @@ def add_scale_bar(ax: plt.Axes, location=(0.08, 0.04)) -> None:
     )
 
 
+def calculate_zoom_level(minx: float, miny: float, maxx: float, maxy: float, max_pixels: int = 16000) -> int:
+    """Calculate zoom level to fit bounds within max_pixels for Web Mercator (EPSG:3857)."""
+    width = maxx - minx
+    height = maxy - miny
+    longest_side = max(width, height)
+
+    if longest_side <= 0:
+        return 1
+
+    # Resolution at zoom 0 for EPSG:3857 (meters/pixel)
+    initial_resolution = 2 * math.pi * 6378137 / 256
+    
+    # 2^z = (initial_resolution * max_pixels) / longest_side
+    zoom_float = math.log2((initial_resolution * max_pixels) / longest_side)
+    
+    # Clamp to reasonable Web Mercator limits (e.g., 0-19)
+    zoom = int(round(zoom_float))
+    return max(0, min(zoom, 19))
+
+
+
 def add_satellite_basemap(
     ax: plt.Axes,
     bounds: Tuple[float, float, float, float],
@@ -220,8 +242,11 @@ def add_satellite_basemap(
     # contextily expects bounds in Web Mercator if ll=False.
     if zoom is None:
         try:
-            zoom_guess = ctx.tile._calculate_zoom((minx, maxx, miny, maxy), max_size=4096)
-        except Exception:
+            # Use custom zoom calculation with high pixel target (16000) for sharp basemaps
+            zoom_guess = calculate_zoom_level(minx, miny, maxx, maxy, max_pixels=16000)
+            print(f"Auto-selected basemap zoom level: {zoom_guess} (based on max_pixels=16000)")
+        except Exception as e:
+            print(f"Could not auto-calculate zoom: {e}")
             zoom_guess = None
     else:
         zoom_guess = zoom

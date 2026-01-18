@@ -306,6 +306,13 @@ def plot_study_site(
     # Web Mercator keeps satellite tiles simple; when basemap is disabled fall back to a local projected CRS.
     target_crs = CRS.from_epsg(3857) if use_basemap else choose_projected_crs(gdf)
     gdf_proj = gdf.to_crs(target_crs)
+    
+    # Extract MOP ID from label (e.g., "MOP 520" -> 520) for correct region filtering
+    if "label" in gdf_proj.columns:
+        try:
+            gdf_proj["mop_id"] = gdf_proj["label"].apply(lambda x: int(str(x).split(" ")[1]))
+        except (ValueError, IndexError):
+            warnings.warn("Could not parse 'mop_id' from 'label' column. Region annotation may fail.", stacklevel=2)
 
     minx, maxx, miny, maxy = padded_bounds(gdf_proj, buffer_fraction)
     rotation_center = ((minx + maxx) / 2, (miny + maxy) / 2)
@@ -328,8 +335,8 @@ def plot_study_site(
     else:
         gdf_rot.plot(ax=ax, color="#1f3c5b", markersize=30, alpha=0.9)
     
-    # Annotate specific regions if tr_id is present
-    if "tr_id" in gdf_rot.columns:
+    # Annotate specific regions if mop_id is present
+    if "mop_id" in gdf_rot.columns:
         annotate_regions(ax, gdf_rot)
 
     ax.set_xlim(rotated_bounds[0], rotated_bounds[1])
@@ -354,21 +361,30 @@ def plot_study_site(
 def annotate_regions(ax: plt.Axes, gdf: gpd.GeoDataFrame) -> None:
     """Annotate regions and delineate boundaries based on MOP_RANGES."""
     for name, (start_id, end_id) in MOP_RANGES.items():
-        # Filter for the region
-        region = gdf[(gdf["tr_id"] >= start_id) & (gdf["tr_id"] <= end_id)]
+        # Filter for the region using mop_id
+        region = gdf[(gdf["mop_id"] >= start_id) & (gdf["mop_id"] <= end_id)]
         if region.empty:
             continue
 
         # Delineate boundaries (start and end transects)
         # Note: We look for the exact start/end ID in the data. If missing, we pick the closest available extremum.
-        boundaries = region[region["tr_id"].isin([start_id, end_id])]
+        boundaries = region[region["mop_id"].isin([start_id, end_id])]
         if not boundaries.empty:
             boundaries.plot(ax=ax, color="black", linewidth=2.5, zorder=5)
 
-        # Place label at the centroid of the region
-        # Use union_all() to get the combined geometry of all lines in the region
-        combined_geom = region.geometry.union_all()
-        centroid = combined_geom.centroid
+        # Place label at the centroid of the MIDDLE transect to avoid overlapping/skewed centroids
+        target_mid = (start_id + end_id) / 2
+        
+        # Find the transect closest to the middle ID
+        # Calculate distance to target_mid
+        region = region.copy() # Avoid SettingWithCopyWarning
+        region['dist_to_mid'] = (region['mop_id'] - target_mid).abs()
+        
+        # Select the transect with min distance
+        mid_transect_row = region.loc[region['dist_to_mid'].idxmin()]
+        mid_geom = mid_transect_row.geometry
+        
+        centroid = mid_geom.centroid
         
         # Add text with halo for visibility
         txt = ax.text(

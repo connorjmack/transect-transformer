@@ -177,6 +177,49 @@ class KMLParser:
 
         return x, y
 
+    @staticmethod
+    def extend_origins_inland(
+        transects: Dict[str, np.ndarray],
+        extension_m: float = 100.0,
+        pattern: str = "MOP"
+    ) -> Dict[str, np.ndarray]:
+        """Extend transect origins inland (opposite to normal direction).
+
+        This is useful when KML transect lines start on the beach and point
+        seaward, but we want to sample inland cliff features. The extension
+        moves the origin point inland along the reverse of the normal vector.
+
+        Args:
+            transects: Dictionary from parse()
+            extension_m: Distance to extend inland (meters)
+            pattern: Only extend transects with names containing this pattern.
+                     Set to None to extend all transects.
+
+        Returns:
+            Modified transects dictionary with extended origins
+        """
+        transects = transects.copy()
+        origins = transects['origins'].copy()
+        normals = transects['normals']
+        names = transects['names']
+
+        n_extended = 0
+        for i, name in enumerate(names):
+            # Check if this transect matches the pattern
+            if pattern is None or pattern.upper() in str(name).upper():
+                # Move origin inland (opposite to normal direction)
+                # Normal points from origin to endpoint (beach to ocean)
+                # So -normal points inland (ocean to beach to cliff)
+                origins[i, 0] -= extension_m * normals[i, 0]
+                origins[i, 1] -= extension_m * normals[i, 1]
+                n_extended += 1
+
+        if n_extended > 0:
+            logger.info(f"Extended {n_extended} transects inland by {extension_m}m")
+
+        transects['origins'] = origins
+        return transects
+
     def save_transects(
         self,
         transects: Dict[str, np.ndarray],

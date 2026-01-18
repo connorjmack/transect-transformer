@@ -86,6 +86,15 @@ def main():
     logger.info(f"  ✓ Length range: [{kml_transects['lengths'].min():.1f}, "
                 f"{kml_transects['lengths'].max():.1f}]m")
 
+    # Extend MOP transects inland by 100m to reach cliff features
+    # MOP lines start on beach and point seaward, but cliffs are inland
+    logger.info("\n  → Extending MOP transects inland by 100m...")
+    kml_transects = parser.extend_origins_inland(
+        kml_transects,
+        extension_m=100.0,
+        pattern="MOP"
+    )
+
     # Filter by spatial overlap with LiDAR
     if FILTER_BY_OVERLAP:
         logger.info(f"\n  → Filtering transects by LiDAR overlap (buffer: {BUFFER_M}m)...")

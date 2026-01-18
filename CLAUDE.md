@@ -8,6 +8,43 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Core Architecture**: Cross-attention fusion between cliff geometry embeddings (from transect encoder) and environmental embeddings (wave + precipitation encoders), followed by multi-task prediction heads.
 
+## Directory Structure
+
+```
+transect-transformer/
+├── docs/                          # Project documentation and planning
+│   ├── plan.md                    # Implementation phases and roadmap
+│   ├── todo.md                    # Current tasks and progress
+│   └── DATA_REQUIREMENTS.md       # Data collection requirements
+├── src/
+│   ├── data/
+│   │   ├── parsers/               # I/O logic for various formats
+│   │   │   ├── kml_parser.py      # Parse KML/KMZ files
+│   │   │   ├── shapefile_parser.py # Parse shapefiles
+│   │   │   └── __init__.py
+│   │   ├── shapefile_transect_extractor.py  # Core transect extraction
+│   │   ├── transect_voxelizer.py  # Alternative voxel-based extraction (unused)
+│   │   ├── spatial_filter.py      # Spatial filtering utilities
+│   │   ├── README.md              # Data module documentation
+│   │   └── __init__.py
+│   ├── models/                    # Model architecture components
+│   ├── training/                  # Training infrastructure
+│   └── utils/                     # Shared utilities
+├── scripts/
+│   ├── processing/                # Data pipeline scripts
+│   │   └── extract_transects.py   # Transect extraction CLI
+│   ├── visualization/             # Visualization and plotting
+│   │   └── study_site_fig.py      # Generate study site figures
+│   ├── setup/                     # Environment and admin scripts
+│   │   └── verify_setup.py        # Verify installation
+│   └── debug_orientation.py       # Debug script for orientation issues
+├── configs/                       # Model and training configurations
+├── tests/                         # Test suite
+│   └── test_data/                 # Data module tests
+├── README.md                      # Project README
+└── CLAUDE.md                      # This file - AI assistant instructions
+```
+
 ## Commands
 
 ### Environment Setup
@@ -61,7 +98,7 @@ python predict.py --input data/new_site/ --checkpoint checkpoints/best.pt --outp
 ### Data Preprocessing
 ```bash
 # Extract transects from LiDAR using predefined transect lines (shapefile)
-python scripts/extract_transects.py \
+python scripts/processing/extract_transects.py \
     --transects data/mops/transects_10m/transect_lines.shp \
     --las-dir data/raw/lidar/ \
     --output data/processed/transects.npz \
@@ -132,7 +169,11 @@ python scripts/prepare_dataset.py --lidar_dir data/raw/lidar/ --output data/proc
    - **Point features (12)**: distance_m, elevation_m, slope_deg, curvature, roughness, intensity, red, green, blue, classification, return_number, num_returns
    - **Metadata (12)**: cliff_height_m, mean_slope_deg, max_slope_deg, toe_elevation_m, top_elevation_m, orientation_deg, transect_length_m, latitude, longitude, transect_id, mean_intensity, dominant_class
 
-2. **TransectVoxelizer** (`src/data/transect_voxelizer.py`): Alternative voxel-based extraction (unused)
+2. **Parsers** (`src/data/parsers/`): I/O logic for geospatial formats
+   - `kml_parser.py`: Parse KML/KMZ files for transect lines or regions
+   - `shapefile_parser.py`: Parse ESRI shapefiles
+
+3. **TransectVoxelizer** (`src/data/transect_voxelizer.py`): Alternative voxel-based extraction (unused)
    - Bins points along transect into 1D segments
    - More robust to variable point density but currently not used
 
@@ -225,7 +266,7 @@ Each module has corresponding tests in `tests/`:
 ## Development Workflow
 
 ### Phased Implementation
-Follow the phase structure from plan.md:
+Follow the phase structure from docs/plan.md:
 1. **Phase 1**: Data pipeline (transect extraction, wave/precip loaders, dataset class)
 2. **Phase 2**: Model implementation with risk index head only
 3. **Phase 3**: Training infrastructure and validate on synthetic data

@@ -74,7 +74,7 @@ A command-line script is provided for batch processing:
 
 ```bash
 # Extract from shapefile and LAS directory
-python scripts/extract_transects.py \
+python scripts/processing/extract_transects.py \
     --transects data/mops/transects_10m/transect_lines.shp \
     --las-dir data/raw/lidar/ \
     --output data/processed/transects.npz \
@@ -82,14 +82,14 @@ python scripts/extract_transects.py \
     --n-points 128
 
 # Extract from specific LAS files
-python scripts/extract_transects.py \
+python scripts/processing/extract_transects.py \
     --transects data/transects.shp \
     --las-files data/scan1.las data/scan2.las \
     --output data/transects.npz \
     --transect-id-col tr_id
 
 # With visualization
-python scripts/extract_transects.py \
+python scripts/processing/extract_transects.py \
     --transects data/transects.shp \
     --las-dir data/raw/lidar/ \
     --output data/transects.npz \
@@ -278,6 +278,32 @@ ax.set_title("Extracted Transect Profiles")
 ax.legend()
 ax.grid(True, alpha=0.3)
 plt.show()
+```
+
+## Parsers
+
+The `parsers/` subdirectory contains I/O logic for various geospatial file formats:
+
+### KML Parser (`parsers/kml_parser.py`)
+
+Parse KML/KMZ files to extract transect lines, regions, or point locations.
+
+```python
+from src.data.parsers import parse_kml
+
+# Parse KML file
+geometries = parse_kml("transects.kml")
+```
+
+### Shapefile Parser (`parsers/shapefile_parser.py`)
+
+Parse ESRI shapefiles with geopandas.
+
+```python
+from src.data.parsers import parse_shapefile
+
+# Parse shapefile
+gdf = parse_shapefile("transects.shp")
 ```
 
 ## Alternative Extractors

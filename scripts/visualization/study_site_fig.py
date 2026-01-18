@@ -21,6 +21,7 @@ from matplotlib.patches import Rectangle
 from pyproj import CRS
 from shapely import affinity
 from shapely.geometry import box
+from sklearn.decomposition import PCA
 
 # Define study site regions by MOP ID ranges (inclusive)
 MOP_RANGES = {
@@ -126,46 +127,93 @@ def rotate_geometries(gdf: gpd.GeoDataFrame, angle_deg: float, origin: Tuple[flo
     return rotated
 
 
-def add_north_arrow(ax: plt.Axes, xy=(0.92, 0.12)) -> None:
-    """Draw a publication-quality North arrow pointing Left (North)."""
-    # Create a simple compass arrow using polygon coordinates
-    # Arrow points Left (since map is rotated 90 deg CCW)
-    # Origin at xy (center of the arrow base)
+def calculate_optimal_rotation(gdf: gpd.GeoDataFrame) -> float:
+    """Calculate the rotation angle (degrees) to make the coastline horizontal."""
+    # Collect all coordinates
+    coords = []
+    for geom in gdf.geometry:
+        if geom.geom_type == 'LineString':
+            coords.extend(list(geom.coords))
+        elif geom.geom_type == 'MultiLineString':
+            for part in geom.geoms:
+                coords.extend(list(part.coords))
+                
+    if not coords:
+        return 0.0
+        
+    coords = np.array(coords)
     
-    # Scale of the arrow
+    # PCA to find primary axis (coastline trend)
+    pca = PCA(n_components=2)
+    pca.fit(coords)
+    
+    # First component is the direction of maximum variance
+    v1 = pca.components_[0]
+    angle_rad = np.arctan2(v1[1], v1[0])
+    angle_deg = np.degrees(angle_rad)
+    
+    # We want this axis to be horizontal (0 degrees).
+    # So we rotate by -angle_deg.
+    return -angle_deg
+
+
+def add_north_arrow(ax: plt.Axes, rotation_angle: float, xy=(0.08, 0.92)) -> None:
+    """Draw a publication-quality North arrow pointing to True North."""
+    # North in the original data is Up (90 degrees).
+    # After rotating the map by `rotation_angle`, North points to 90 + rotation_angle.
+    arrow_angle_deg = 90 + rotation_angle
+    arrow_angle_rad = np.radians(arrow_angle_deg)
+    
+    # Anchor point (center of the arrow base?)
+    # Let's anchor at the center of the visual element
+    cx, cy = xy
     size = 0.04
-    aspect = 0.6  # Width relative to length
+    width = size * 0.6
     
-    # Coordinates for a stylized arrow pointing LEFT
-    # Tip at (-size, 0), Base at (0, 0), Wings at (0, +/- width)
-    # Actually, let's do a classic "N" arrow.
-    # Because North is Left, the arrow tip is at x - size
+    # Define standard arrow shape pointing Right (0 deg) then rotate it
+    # Tip at (size, 0), Base Center at (0, 0), Tail at (-size*0.2, 0)
+    # Wait, let's define it pointing UP (90 deg) relative to its own local frame?
+    # No, let's define pointing "Forward" along the vector.
     
-    x, y = xy
-    length = size
-    width = size * aspect
+    # Vertices in local coordinates (u, v) where u is along the arrow, v is perpendicular
+    # Tip: (size, 0)
+    # Tail Center: (-size * 0.2, 0)
+    # Top Wing: (-size * 0.1, width)
+    # Bottom Wing: (-size * 0.1, -width)
     
-    # Vertices relative to (x, y) in axes coordinates? 
-    # It's easier to plot in axes fraction.
+    # Rotate these local points by arrow_angle_rad
+    cos_a = np.cos(arrow_angle_rad)
+    sin_a = np.sin(arrow_angle_rad)
     
-    # Main arrow shaft (pointing left)
-    # We'll draw two halves: top half (black) and bottom half (white/outlined) for 3D effect
+    def transform(u, v):
+        # Rotate
+        rx = u * cos_a - v * sin_a
+        ry = u * sin_a + v * cos_a
+        # Translate to axes fraction location
+        # Note: aspect ratio of axes might distort rotation if we just add to (cx, cy)
+        # However, for an annotation/overlay, we usually want a circular appearance regardless of plot aspect.
+        # But 'ax.transAxes' is 0-1. If the plot is 12x7, 0.1 in x is different from 0.1 in y.
+        # To preserve shape, we should define size in display coords or correct for aspect.
+        # For simplicity here, we assume aspect ratio is handled or acceptable.
+        # To be safe, we can use a fixed aspect correction if we knew it.
+        # Let's just calculate in "relative to width" units and scale y by aspect?
+        # A simpler way: use ax.transData for plotting a fixed size shape? No, that zooms.
+        # We'll assume the user adjusts 'size' if it looks squashed.
+        # Actually, let's use a roughly square aspect correction for the 12x7 figure.
+        aspect_ratio = 12 / 7
+        return (cx + rx / aspect_ratio, cy + ry)
+
+    tip = transform(size, 0)
+    tail_center = transform(-size * 0.2, 0)
+    wing_left = transform(-size * 0.1, width)  # "Left" relative to arrow direction
+    wing_right = transform(-size * 0.1, -width) # "Right"
     
-    # Tip (Left), Tail (Right)
-    # Tip: (x - length, y)
-    # Tail Center: (x + length * 0.2, y)
-    # Top Wing: (x, y + width)
-    # Bottom Wing: (x, y - width)
-    
-    tip = (x - length, y)
-    tail_center = (x + length * 0.2, y)
-    top_wing = (x + length * 0.1, y + width)
-    bottom_wing = (x + length * 0.1, y - width)
-    
-    # Upper half (Black)
+    # Draw arrow halves
+    # Half 1 (Left side of arrow? Top side?)
+    # Let's assume standard lighting: Left side shaded?
     ax.add_patch(
         plt.Polygon(
-            [tip, tail_center, top_wing],
+            [tip, tail_center, wing_left],
             transform=ax.transAxes,
             facecolor="black",
             edgecolor="black",
@@ -173,11 +221,9 @@ def add_north_arrow(ax: plt.Axes, xy=(0.92, 0.12)) -> None:
             zorder=20
         )
     )
-    
-    # Lower half (White with black edge)
     ax.add_patch(
         plt.Polygon(
-            [tip, tail_center, bottom_wing],
+            [tip, tail_center, wing_right],
             transform=ax.transAxes,
             facecolor="white",
             edgecolor="black",
@@ -186,12 +232,20 @@ def add_north_arrow(ax: plt.Axes, xy=(0.92, 0.12)) -> None:
         )
     )
     
-    # N Label (to the left of the tip)
+    # Label "N"
+    # Position it slightly ahead of the tip? Or behind the tail?
+    # Let's put it past the tip.
+    label_pos = transform(size + 0.03, 0)
+    
+    # Text rotation? 
+    # Usually the "N" is upright, or rotated with the arrow.
+    # Let's keep it upright for readability, or rotated if it fits the style.
+    # Upright is safer.
     ax.text(
-        x - length - 0.02,
-        y,
+        label_pos[0],
+        label_pos[1],
         "N",
-        ha="right",
+        ha="center",
         va="center",
         transform=ax.transAxes,
         fontsize=14,
@@ -423,14 +477,22 @@ def plot_study_site(
     minx, maxx, miny, maxy = padded_bounds(gdf_proj, buffer_fraction)
     rotation_center = ((minx + maxx) / 2, (miny + maxy) / 2)
 
-    gdf_rot = rotate_geometries(gdf_proj, ROTATION_DEG, origin=rotation_center)
-    rotated_bounds = rotate_bounds((minx, maxx, miny, maxy), ROTATION_DEG, origin=rotation_center)
+    # Calculate optimal rotation to align coastline horizontally
+    rotation_angle = calculate_optimal_rotation(gdf_proj)
+    print(f"Calculated optimal rotation: {rotation_angle:.2f} degrees")
+    
+    # Check if we should flip 180 degrees (e.g. if coast is upside down)
+    # This is hard to know without context, but usually we want ocean on left/right/top/bottom?
+    # For now, we trust PCA aligns the major axis. If it's 180 off, the north arrow will handle orientation.
+
+    gdf_rot = rotate_geometries(gdf_proj, rotation_angle, origin=rotation_center)
+    rotated_bounds = rotate_bounds((minx, maxx, miny, maxy), rotation_angle, origin=rotation_center)
 
     fig, ax = plt.subplots(figsize=(12, 7))
 
     if use_basemap:
         add_satellite_basemap(
-            ax, (minx, maxx, miny, maxy), rotation_center, ROTATION_DEG, zoom=basemap_zoom
+            ax, (minx, maxx, miny, maxy), rotation_center, rotation_angle, zoom=basemap_zoom
         )
 
     geom_types = set(gdf_rot.geom_type.str.lower())
@@ -454,7 +516,7 @@ def plot_study_site(
     if title:
         ax.set_title(title, fontsize=12, pad=10)
 
-    add_north_arrow(ax, xy=(0.08, 0.92))
+    add_north_arrow(ax, rotation_angle, xy=(0.08, 0.92))
     add_scale_bar(ax, location=(0.92, 0.05))
     ax.set_aspect("equal")
 

@@ -195,3 +195,6 @@ credentials.json
 
 # Exclude plan.md from gitignore (keep it tracked)
 !plan.md
+
+# Agent settings
+.claude/

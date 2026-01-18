@@ -141,6 +141,10 @@ ehthumbs.db
 Desktop.ini
 
 # Data files
+data/mops/
+data/testing/
+*.kml
+*.kmz
 data/raw/
 data/processed/
 data/interim/

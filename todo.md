@@ -1,0 +1,1 @@
+- generate transects using transect-maker that are aligned specifically with the mop.kml 

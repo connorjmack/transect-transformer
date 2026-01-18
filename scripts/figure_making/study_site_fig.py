@@ -1,5 +1,9 @@
 #!/usr/bin/env python
-"""Create a publication-quality study site map from a shapefile."""
+"""Create a publication-quality study site map from a shapefile.
+
+Outputs a landscape map with north on the left (rotated 90° CCW), adds a satellite
+basemap, legend, north arrow, and scale bar, and writes to results/figures by default.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +15,7 @@ import warnings
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.lines import Line2D
-from matplotlib.patches import Patch, Rectangle
+from matplotlib.patches import Rectangle
 from pyproj import CRS
 from shapely import affinity
 from shapely.geometry import box
@@ -55,6 +58,12 @@ def parse_args() -> argparse.Namespace:
         "--no-basemap",
         action="store_true",
         help="Skip adding satellite imagery (requires contextily if enabled).",
+    )
+    parser.add_argument(
+        "--basemap-zoom",
+        type=int,
+        default=None,
+        help="Optional contextily zoom level (higher = more detail). Auto-calculated if omitted.",
     )
     return parser.parse_args()
 
@@ -196,28 +205,48 @@ def add_satellite_basemap(
     bounds: Tuple[float, float, float, float],
     rotation_center: Tuple[float, float],
     rotation_angle: float,
+    zoom: int | None,
 ) -> bool:
     """Fetch and place a satellite basemap rotated to match the plot."""
     try:
         import contextily as ctx
     except ImportError:
-        warnings.warn("contextily not installed; skipping satellite basemap.", stacklevel=2)
-        return False
+        raise ImportError(
+            "contextily is required for the basemap. Install with `pip install contextily` "
+            "or rerun with --no-basemap."
+        )
 
     minx, maxx, miny, maxy = bounds
     # contextily expects bounds in Web Mercator if ll=False.
-    img, _ = ctx.bounds2img(
-        minx, miny, maxx, maxy, source=ctx.providers.Esri.WorldImagery, ll=False
-    )
+    if zoom is None:
+        try:
+            zoom_guess = ctx.tile._calculate_zoom((minx, maxx, miny, maxy), max_size=4096)
+        except Exception:
+            zoom_guess = None
+    else:
+        zoom_guess = zoom
 
-    k = int(rotation_angle / 90) % 4
+    bounds_kwargs = dict(source=ctx.providers.Esri.WorldImagery, ll=False)
+    if zoom_guess is not None:
+        bounds_kwargs["zoom"] = int(zoom_guess)
+
+    img, _ = ctx.bounds2img(minx, miny, maxx, maxy, **bounds_kwargs)
+
+    if rotation_angle % 90 != 0:
+        warnings.warn("Basemap rotation supports 90° increments; skipping rotation.", stacklevel=2)
+        k = 0
+    else:
+        k = int(rotation_angle / 90) % 4
+
     if k:
         img = np.rot90(img, k=k)
         extent = rotate_bounds(bounds, rotation_angle, origin=rotation_center)
     else:
         extent = (minx, maxx, miny, maxy)
 
-    ax.imshow(img, extent=(extent[0], extent[1], extent[2], extent[3]), origin="upper")
+    ax.imshow(
+        img, extent=(extent[0], extent[1], extent[2], extent[3]), origin="upper", zorder=0, alpha=0.9
+    )
     return True
 
 
@@ -231,6 +260,7 @@ def plot_study_site(
     dpi: int,
     title: str | None,
     use_basemap: bool,
+    basemap_zoom: int | None,
 ) -> None:
     gdf = gpd.read_file(shapefile)
     if gdf.empty:
@@ -249,23 +279,17 @@ def plot_study_site(
     fig, ax = plt.subplots(figsize=(12, 7))
 
     if use_basemap:
-        add_satellite_basemap(ax, (minx, maxx, miny, maxy), rotation_center, ROTATION_DEG)
+        add_satellite_basemap(
+            ax, (minx, maxx, miny, maxy), rotation_center, ROTATION_DEG, zoom=basemap_zoom
+        )
 
     geom_types = set(gdf_rot.geom_type.str.lower())
     if any("polygon" in g for g in geom_types):
         gdf_rot.plot(ax=ax, facecolor="#6aa2c9", edgecolor="#1f3c5b", linewidth=0.9, alpha=0.45)
-        legend_label = "Study site extent"
-        legend_handle = Patch(facecolor="#6aa2c9", edgecolor="#1f3c5b", label=legend_label)
     elif any("line" in g for g in geom_types):
         gdf_rot.plot(ax=ax, color="#1f3c5b", linewidth=1.6)
-        legend_label = "Study site alignment"
-        legend_handle = Line2D([0], [0], color="#1f3c5b", linewidth=1.6, label=legend_label)
     else:
         gdf_rot.plot(ax=ax, color="#1f3c5b", markersize=30, alpha=0.9)
-        legend_label = "Study site points"
-        legend_handle = Line2D(
-            [0], [0], color="#1f3c5b", marker="o", linestyle="", markersize=8, label=legend_label
-        )
 
     ax.set_xlim(rotated_bounds[0], rotated_bounds[1])
     ax.set_ylim(rotated_bounds[2], rotated_bounds[3])
@@ -275,8 +299,6 @@ def plot_study_site(
     ax.set_ylabel("")
     if title:
         ax.set_title(title, fontsize=12, pad=10)
-
-    ax.legend(handles=[legend_handle], loc="upper right", frameon=True, framealpha=0.9)
 
     add_north_arrow(ax)
     add_scale_bar(ax)
@@ -297,6 +319,7 @@ def main() -> None:
         dpi=args.dpi,
         title=args.title,
         use_basemap=not args.no_basemap,
+        basemap_zoom=args.basemap_zoom,
     )
     print(f"Saved map to {args.output}")
 

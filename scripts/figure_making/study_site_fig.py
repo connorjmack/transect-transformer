@@ -126,41 +126,84 @@ def rotate_geometries(gdf: gpd.GeoDataFrame, angle_deg: float, origin: Tuple[flo
     return rotated
 
 
-def add_north_arrow(ax: plt.Axes, xy=(0.88, 0.12)) -> None:
-    """Draw a horizontal north arrow pointing left (north = left, south = right)."""
-    ax.annotate(
-        "",
-        xy=(xy[0] - 0.14, xy[1]),
-        xytext=xy,
-        xycoords="axes fraction",
-        arrowprops=dict(facecolor="black", width=4, headwidth=12),
+def add_north_arrow(ax: plt.Axes, xy=(0.92, 0.12)) -> None:
+    """Draw a publication-quality North arrow pointing Left (North)."""
+    # Create a simple compass arrow using polygon coordinates
+    # Arrow points Left (since map is rotated 90 deg CCW)
+    # Origin at xy (center of the arrow base)
+    
+    # Scale of the arrow
+    size = 0.04
+    aspect = 0.6  # Width relative to length
+    
+    # Coordinates for a stylized arrow pointing LEFT
+    # Tip at (-size, 0), Base at (0, 0), Wings at (0, +/- width)
+    # Actually, let's do a classic "N" arrow.
+    # Because North is Left, the arrow tip is at x - size
+    
+    x, y = xy
+    length = size
+    width = size * aspect
+    
+    # Vertices relative to (x, y) in axes coordinates? 
+    # It's easier to plot in axes fraction.
+    
+    # Main arrow shaft (pointing left)
+    # We'll draw two halves: top half (black) and bottom half (white/outlined) for 3D effect
+    
+    # Tip (Left), Tail (Right)
+    # Tip: (x - length, y)
+    # Tail Center: (x + length * 0.2, y)
+    # Top Wing: (x, y + width)
+    # Bottom Wing: (x, y - width)
+    
+    tip = (x - length, y)
+    tail_center = (x + length * 0.2, y)
+    top_wing = (x + length * 0.1, y + width)
+    bottom_wing = (x + length * 0.1, y - width)
+    
+    # Upper half (Black)
+    ax.add_patch(
+        plt.Polygon(
+            [tip, tail_center, top_wing],
+            transform=ax.transAxes,
+            facecolor="black",
+            edgecolor="black",
+            linewidth=1,
+            zorder=20
+        )
     )
+    
+    # Lower half (White with black edge)
+    ax.add_patch(
+        plt.Polygon(
+            [tip, tail_center, bottom_wing],
+            transform=ax.transAxes,
+            facecolor="white",
+            edgecolor="black",
+            linewidth=1,
+            zorder=20
+        )
+    )
+    
+    # N Label (to the left of the tip)
     ax.text(
-        xy[0] - 0.16,
-        xy[1],
+        x - length - 0.02,
+        y,
         "N",
-        ha="center",
+        ha="right",
         va="center",
         transform=ax.transAxes,
-        fontsize=10,
+        fontsize=14,
         fontweight="bold",
-        bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, boxstyle="round,pad=0.2"),
-    )
-    ax.text(
-        xy[0] + 0.02,
-        xy[1],
-        "S",
-        ha="center",
-        va="center",
-        transform=ax.transAxes,
-        fontsize=9,
-        bbox=dict(facecolor="white", edgecolor="none", alpha=0.7, boxstyle="round,pad=0.15"),
-    )
+        color="black",
+        zorder=20
+    ).set_path_effects([pe.withStroke(linewidth=3, foreground="white", alpha=0.8)])
 
 
 def nice_scale_length(map_width_m: float) -> float:
     """Pick a rounded scale length (in meters) based on map width."""
-    target = map_width_m / 5
+    target = map_width_m / 6  # Target ~1/6th of map width
     candidates = [1, 2, 5]
     exponent = 0
     while target >= 10:
@@ -170,46 +213,109 @@ def nice_scale_length(map_width_m: float) -> float:
         target *= 10
         exponent -= 1
     scaled_candidates = [c * (10**exponent) for c in candidates]
-    return min(scaled_candidates, key=lambda c: abs(c - map_width_m / 5))
+    return min(scaled_candidates, key=lambda c: abs(c - map_width_m / 6))
 
 
-def add_scale_bar(ax: plt.Axes, location=(0.08, 0.04)) -> None:
-    """Add a scale bar using axis limits (assumes meters)."""
+def add_scale_bar(ax: plt.Axes, location=(0.92, 0.05)) -> None:
+    """Add a publication-quality alternating scale bar in the bottom right."""
     x_min, x_max = ax.get_xlim()
     y_min, y_max = ax.get_ylim()
     map_width = x_max - x_min
-    bar_length = nice_scale_length(map_width)
-    bar_length = max(bar_length, 1.0)
-    bar_height = (y_max - y_min) * 0.006
-
-    x0 = x_min + map_width * location[0]
-    y0 = y_min + (y_max - y_min) * location[1]
-
-    ax.add_patch(
-        Rectangle(
-            (x0, y0),
-            bar_length,
-            bar_height,
-            facecolor="black",
-            edgecolor="black",
-            linewidth=0.8,
+    
+    # Determine scale bar length
+    bar_length_m = nice_scale_length(map_width)
+    
+    # Height of the bar
+    bar_height = (y_max - y_min) * 0.015
+    
+    # Location is in axes fraction, convert to data coordinates
+    # But for precise sizing in meters, we construct it in data coords
+    # Anchor: Center of the scale bar block
+    anchor_x = x_min + (x_max - x_min) * location[0]
+    anchor_y = y_min + (y_max - y_min) * location[1]
+    
+    # We'll center the bar horizontally around anchor_x? 
+    # No, let's align the *right* side to anchor_x to keep it in the corner.
+    right_x = anchor_x
+    start_x = right_x - bar_length_m
+    
+    # 2 segments (or 4 for finer grain)
+    # Let's do 2 major segments: 0 to 50%, 50% to 100%
+    mid_x = start_x + bar_length_m / 2
+    
+    # Segment 1 (Left, Black)
+    rect1 = Rectangle(
+        (start_x, anchor_y),
+        bar_length_m / 2,
+        bar_height,
+        facecolor="black",
+        edgecolor="black",
+        linewidth=1,
+        zorder=20
+    )
+    # Segment 2 (Right, White)
+    rect2 = Rectangle(
+        (mid_x, anchor_y),
+        bar_length_m / 2,
+        bar_height,
+        facecolor="white",
+        edgecolor="black",
+        linewidth=1,
+        zorder=20
+    )
+    
+    ax.add_patch(rect1)
+    ax.add_patch(rect2)
+    
+    # Border around the whole thing
+    rect_border = Rectangle(
+        (start_x, anchor_y),
+        bar_length_m,
+        bar_height,
+        facecolor="none",
+        edgecolor="black",
+        linewidth=1,
+        zorder=21
+    )
+    ax.add_patch(rect_border)
+    
+    # Labels
+    # 0, Mid, Max
+    label_y = anchor_y - bar_height * 0.5 # Below bar
+    
+    for x_pos, txt in [(start_x, "0"), (mid_x, f"{bar_length_m/2:.0f}"), (right_x, f"{bar_length_m:.0f}")]:
+        t = ax.text(
+            x_pos,
+            label_y,
+            txt,
+            ha="center",
+            va="top",
+            fontsize=9,
+            fontweight="bold",
+            zorder=22
         )
-    )
-    if bar_length >= 1000:
-        label = f"{bar_length/1000:.0f} km"
-    elif bar_length >= 10:
-        label = f"{bar_length:.0f} m"
-    else:
-        label = f"{bar_length:.1f} m"
+        t.set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
+        
+    # Units
+    unit_txt = "m" if bar_length_m < 1000 else "km"
+    # If km, format labels? No, keeping it simple meters for now or simple logic
+    if bar_length_m >= 1000:
+        # Re-label for km
+        km_val = bar_length_m / 1000
+        # Update text would be complex here, assuming meters for typical beach transects (~10km)
+        # If the map is huge, we might need logic.
+        pass
+
     ax.text(
-        x0 + bar_length / 2,
-        y0 + bar_height * 1.8,
-        label,
-        ha="center",
-        va="bottom",
-        fontsize=9,
-        bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=0.2),
-    )
+        right_x + bar_length_m * 0.05,
+        anchor_y + bar_height/2,
+        "m",
+        ha="left",
+        va="center",
+        fontsize=10,
+        fontweight="bold",
+        zorder=22
+    ).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
 
 
 def calculate_zoom_level(minx: float, miny: float, maxx: float, maxy: float, max_pixels: int = 16000) -> int:

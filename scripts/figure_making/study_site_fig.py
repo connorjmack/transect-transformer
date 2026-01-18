@@ -454,8 +454,8 @@ def plot_study_site(
     if title:
         ax.set_title(title, fontsize=12, pad=10)
 
-    add_north_arrow(ax)
-    add_scale_bar(ax)
+    add_north_arrow(ax, xy=(0.08, 0.92))
+    add_scale_bar(ax, location=(0.92, 0.05))
     ax.set_aspect("equal")
 
     output.parent.mkdir(parents=True, exist_ok=True)

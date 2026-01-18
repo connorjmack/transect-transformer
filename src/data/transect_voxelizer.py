@@ -29,10 +29,10 @@ class TransectVoxelizer:
 
     Args:
         bin_size_m: Size of bins along transect in meters (default: 1.0)
-        corridor_width_m: Width of extraction corridor perpendicular to transect (default: 2.0)
+        corridor_width_m: Width of extraction corridor perpendicular to transect (default: 1.0)
         max_bins: Maximum number of bins (sequence length) (default: 128)
         min_points_per_bin: Minimum points required for valid bin (default: 3)
-        profile_length_m: Maximum profile length from origin (default: 150)
+        profile_length_m: Search distance in each direction from origin (default: 500)
 
     Example:
         >>> voxelizer = TransectVoxelizer(bin_size_m=1.0, max_bins=128)
@@ -46,10 +46,10 @@ class TransectVoxelizer:
     def __init__(
         self,
         bin_size_m: float = 1.0,
-        corridor_width_m: float = 2.0,
+        corridor_width_m: float = 1.0,
         max_bins: int = 128,
         min_points_per_bin: int = 3,
-        profile_length_m: float = 150.0,
+        profile_length_m: float = 500.0,
     ):
         if laspy is None:
             raise ImportError(
@@ -65,7 +65,8 @@ class TransectVoxelizer:
 
         logger.info(
             f"Initialized TransectVoxelizer: {bin_size_m}m bins, "
-            f"{max_bins} max bins, {corridor_width_m}m corridor"
+            f"{max_bins} max bins, {corridor_width_m}m corridor, "
+            f"±{profile_length_m}m search range"
         )
 
     def extract_from_file(
@@ -168,8 +169,11 @@ class TransectVoxelizer:
                 centers_list.append(transect_data['bin_centers'])
                 mask_list.append(transect_data['bin_mask'])
                 metadata_list.append(transect_data['metadata'])
+                valid_bins = transect_data['bin_mask'].sum()
+                if (i < 5) or (i % 10 == 0):
+                    logger.info(f"  {name}: {valid_bins}/{self.max_bins} valid bins")
             else:
-                logger.warning(f"Failed to extract {name}")
+                logger.warning(f"  {name}: FAILED - no corridor points found")
                 # Add empty transect
                 features_list.append(np.zeros((self.max_bins, 6)))
                 centers_list.append(np.linspace(0, self.profile_length, self.max_bins))
@@ -202,10 +206,11 @@ class TransectVoxelizer:
         Returns:
             Dictionary with voxelized data or None if extraction fails
         """
-        # Step 1: Extract corridor points
+        # Step 1: Extract corridor points (search in both directions)
         corridor_points = self._extract_corridor(xyz, tree, origin[:2], normal)
 
         if len(corridor_points) < self.min_points:
+            # logger.debug(f"Insufficient corridor points: {len(corridor_points)} < {self.min_points}")
             return None
 
         # Step 2: Project to transect coordinates
@@ -213,8 +218,9 @@ class TransectVoxelizer:
         distances = np.dot(relative, normal)
         elevations = corridor_points[:, 2]
 
-        # Filter to valid range
-        valid_mask = (distances >= 0) & (distances <= self.profile_length)
+        # Filter to valid range (allow negative distances - both directions from origin)
+        # This allows transects that start outside LiDAR to sample the portion that overlaps
+        valid_mask = (distances >= -self.profile_length) & (distances <= self.profile_length)
         if valid_mask.sum() < self.min_points:
             return None
 
@@ -222,15 +228,21 @@ class TransectVoxelizer:
         distances = distances[valid_mask]
         elevations = elevations[valid_mask]
 
-        # Step 3: Determine number of bins
-        max_dist = min(distances.max(), self.profile_length)
-        n_bins = min(int(max_dist / self.bin_size), self.max_bins)
+        # Step 3: Determine actual range of data and create bins
+        min_dist = distances.min()
+        max_dist = distances.max()
+        data_range = max_dist - min_dist
+
+        if data_range < self.bin_size:
+            return None
+
+        n_bins = min(int(data_range / self.bin_size), self.max_bins)
 
         if n_bins < 2:
             return None
 
-        # Step 4: Create bins and assign points
-        bin_edges = np.linspace(0, max_dist, n_bins + 1)
+        # Step 4: Create bins and assign points (bins start at min_dist, not 0)
+        bin_edges = np.linspace(min_dist, max_dist, n_bins + 1)
         bin_indices = np.digitize(distances, bin_edges) - 1
         bin_indices = np.clip(bin_indices, 0, n_bins - 1)
 
@@ -263,13 +275,9 @@ class TransectVoxelizer:
                 bin_mask,
                 np.zeros(pad_length, dtype=bool)
             ])
-            # Extend bin centers linearly
-            last_center = bin_centers[-1] if len(bin_centers) > 0 else 0
-            extra_centers = np.linspace(
-                last_center + self.bin_size,
-                self.profile_length,
-                pad_length
-            )
+            # Extend bin centers linearly beyond the last valid bin
+            last_center = bin_centers[-1] if len(bin_centers) > 0 else min_dist
+            extra_centers = last_center + np.arange(1, pad_length + 1) * self.bin_size
             bin_centers = np.concatenate([bin_centers, extra_centers])
 
         # Compute metadata
@@ -300,15 +308,18 @@ class TransectVoxelizer:
         Returns:
             (M, 3) points within corridor
         """
-        # Sample query points along transect
+        # Sample query points along transect in BOTH directions from origin
+        # This allows extraction when transect origin is outside LiDAR extent
         n_query = int(self.profile_length / self.bin_size) + 1
-        query_distances = np.linspace(0, self.profile_length, n_query)
+        query_distances = np.linspace(-self.profile_length, self.profile_length, 2 * n_query - 1)
         query_points = origin[None, :] + query_distances[:, None] * normal[None, :]
 
-        # Find all points within corridor_width of query points
+        # Find all points within corridor half-width of query points
+        # corridor_width is total width, so half-width on each side of centerline
+        half_width = self.corridor_width / 2.0
         nearby_indices = set()
         for qp in query_points:
-            indices = tree.query_ball_point(qp, r=self.corridor_width)
+            indices = tree.query_ball_point(qp, r=half_width)
             nearby_indices.update(indices)
 
         if len(nearby_indices) == 0:
@@ -321,7 +332,7 @@ class TransectVoxelizer:
         relative = candidate_points[:, :2] - origin
         perp_dist = np.abs(np.cross(relative, normal))
 
-        valid_mask = perp_dist < self.corridor_width
+        valid_mask = perp_dist <= half_width
         return candidate_points[valid_mask]
 
     def _aggregate_bin(

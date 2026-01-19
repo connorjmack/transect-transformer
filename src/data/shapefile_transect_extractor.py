@@ -417,26 +417,46 @@ class ShapefileTransectExtractor:
         # Compute derived features
         n = self.n_points
 
-        # Slope (degrees)
-        slope = np.zeros(n)
-        for i in range(n):
-            if i == 0:
-                dz = resampled_z[i + 1] - resampled_z[i]
-                dd = target_distances[i + 1] - target_distances[i]
-            elif i == n - 1:
-                dz = resampled_z[i] - resampled_z[i - 1]
-                dd = target_distances[i] - target_distances[i - 1]
-            else:
-                dz = resampled_z[i + 1] - resampled_z[i - 1]
-                dd = target_distances[i + 1] - target_distances[i - 1]
-            slope[i] = np.degrees(np.arctan2(dz, dd + 1e-8))
+        # Uniform step size (target_distances are linearly spaced)
+        dx = (target_distances[-1] - target_distances[0]) / (n - 1) if n > 1 else 1.0
+        dx = max(dx, 0.01)  # Minimum 1cm step to avoid numerical issues
 
-        # Curvature (second derivative)
-        curvature = np.zeros(n)
-        for i in range(1, n - 1):
-            d2z = resampled_z[i + 1] - 2 * resampled_z[i] + resampled_z[i - 1]
-            dd2 = ((target_distances[i + 1] - target_distances[i]) ** 2) + 1e-8
-            curvature[i] = d2z / dd2
+        # Smooth elevation before derivative computation to reduce noise
+        # Use a simple moving average (Gaussian-like smoothing)
+        smooth_window = 5
+        z_smooth = np.convolve(
+            resampled_z,
+            np.ones(smooth_window) / smooth_window,
+            mode='same'
+        )
+        # Handle edge effects by keeping original values at boundaries
+        half_win = smooth_window // 2
+        z_smooth[:half_win] = resampled_z[:half_win]
+        z_smooth[-half_win:] = resampled_z[-half_win:]
+
+        # First derivative (slope) using central differences on smoothed data
+        dz_dx = np.zeros(n)
+        dz_dx[0] = (z_smooth[1] - z_smooth[0]) / dx
+        dz_dx[-1] = (z_smooth[-1] - z_smooth[-2]) / dx
+        dz_dx[1:-1] = (z_smooth[2:] - z_smooth[:-2]) / (2 * dx)
+
+        # Slope in degrees
+        slope = np.degrees(np.arctan(dz_dx))
+
+        # Second derivative using central differences
+        d2z_dx2 = np.zeros(n)
+        d2z_dx2[1:-1] = (z_smooth[2:] - 2 * z_smooth[1:-1] + z_smooth[:-2]) / (dx ** 2)
+        # Extrapolate edges
+        d2z_dx2[0] = d2z_dx2[1]
+        d2z_dx2[-1] = d2z_dx2[-2]
+
+        # Profile curvature: κ = z'' / (1 + z'^2)^(3/2)
+        # This is the proper curvature formula that accounts for slope
+        curvature = d2z_dx2 / np.power(1 + dz_dx ** 2, 1.5)
+
+        # Clip to physically reasonable bounds (±10 1/m is already extreme for cliffs)
+        # Values beyond this are numerical artifacts from noise/interpolation
+        curvature = np.clip(curvature, -10.0, 10.0)
 
         # Roughness (local elevation std)
         roughness = np.zeros(n)

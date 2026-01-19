@@ -97,6 +97,7 @@ logger = setup_logger(__name__, level="INFO")
 
 # Beach name to MOP range mapping (San Diego County)
 # These ranges match the transect shapefile definitions
+# Note: Some ranges overlap at boundaries (e.g., 567 is in both Blacks and Torrey)
 BEACH_MOP_RANGES = {
     'blacks': (520, 567),
     'torrey': (567, 581),
@@ -105,6 +106,72 @@ BEACH_MOP_RANGES = {
     'sanelijo': (683, 708),
     'encinitas': (708, 764),
 }
+
+# Ordered list of beaches from south to north for unified cube
+BEACH_ORDER = ['blacks', 'torrey', 'delmar', 'solana', 'sanelijo', 'encinitas']
+
+
+def get_unified_mop_list() -> List[int]:
+    """Get ordered list of all MOP IDs across all beaches.
+
+    Returns MOPs in geographic order (south to north), with duplicates removed
+    at beach boundaries.
+
+    Returns:
+        List of MOP IDs in order
+    """
+    mop_set = set()
+    mop_list = []
+
+    for beach in BEACH_ORDER:
+        mop_min, mop_max = BEACH_MOP_RANGES[beach]
+        for mop in range(mop_min, mop_max + 1):
+            if mop not in mop_set:
+                mop_set.add(mop)
+                mop_list.append(mop)
+
+    return mop_list
+
+
+def get_beach_slices(mop_list: List[int]) -> Dict[str, Tuple[int, int]]:
+    """Get slice indices for each beach within the unified MOP list.
+
+    Args:
+        mop_list: Ordered list of MOP IDs
+
+    Returns:
+        Dictionary mapping beach name to (start_idx, end_idx) tuple
+    """
+    mop_to_idx = {mop: idx for idx, mop in enumerate(mop_list)}
+    beach_slices = {}
+
+    for beach in BEACH_ORDER:
+        mop_min, mop_max = BEACH_MOP_RANGES[beach]
+        # Find indices for MOPs in this beach's range
+        indices = [mop_to_idx[mop] for mop in range(mop_min, mop_max + 1) if mop in mop_to_idx]
+        if indices:
+            beach_slices[beach] = (min(indices), max(indices) + 1)
+
+    return beach_slices
+
+
+def parse_mop_id(transect_id: str) -> Optional[int]:
+    """Parse MOP ID number from transect ID string.
+
+    Handles formats like "MOP 595", "MOP595", "595", etc.
+
+    Args:
+        transect_id: Transect ID string from shapefile
+
+    Returns:
+        Integer MOP ID or None if parsing fails
+    """
+    import re
+    # Try to extract number from string
+    match = re.search(r'(\d+)', str(transect_id))
+    if match:
+        return int(match.group(1))
+    return None
 
 # Cross-platform path mapping
 # Maps path prefixes between Mac and Linux
@@ -516,6 +583,159 @@ def convert_flat_to_cube(
     }
 
 
+def convert_flat_to_cube_unified(
+    flat_transects: Dict[str, np.ndarray],
+    mop_list: List[int],
+    epoch_files: List[Path],
+    epoch_mop_ranges: List[Tuple[int, int]],
+    n_points: int = 128,
+    min_transects_per_epoch: int = 10,
+) -> Dict[str, np.ndarray]:
+    """Convert flat transect format to unified cube with pre-defined dimensions.
+
+    Unlike convert_flat_to_cube(), this function uses pre-defined transect and
+    epoch dimensions, allowing for partial coverage surveys and consistent
+    indexing across the entire study area.
+
+    Args:
+        flat_transects: Dictionary with flat arrays from extractor:
+            - points: (N_total, n_points, 12)
+            - distances: (N_total, n_points)
+            - metadata: (N_total, 12)
+            - transect_ids: (N_total,) - transect ID strings like "MOP 595"
+            - las_sources: (N_total,) - filenames indicating which epoch
+        mop_list: Pre-defined ordered list of MOP IDs (defines transect dimension)
+        epoch_files: Pre-defined ordered list of epoch filenames (defines epoch dimension)
+        epoch_mop_ranges: List of (MOP1, MOP2) tuples for each epoch's survey coverage
+        n_points: Number of points per transect
+        min_transects_per_epoch: Skip epochs with fewer valid transects (default: 10)
+
+    Returns:
+        Dictionary with unified cube arrays:
+            - points: (n_transects, n_epochs, n_points, 12)
+            - distances: (n_transects, n_epochs, n_points)
+            - metadata: (n_transects, n_epochs, 12)
+            - timestamps: (n_epochs,) ordinal days
+            - transect_ids: (n_transects,) MOP IDs as integers
+            - mop_ids: (n_transects,) same as transect_ids for clarity
+            - epoch_files: (n_epochs,) original LAS filenames
+            - epoch_dates: (n_epochs,) ISO date strings
+            - epoch_mop_ranges: (n_epochs, 2) [MOP1, MOP2] per survey
+            - coverage_mask: (n_transects, n_epochs) boolean
+            - beach_slices: dict mapping beach name to (start, end) indices
+            - feature_names: list of feature names
+            - metadata_names: list of metadata names
+            - skipped_epochs: list of epoch indices skipped due to low coverage
+    """
+    points = flat_transects['points']
+    distances = flat_transects['distances']
+    metadata = flat_transects['metadata']
+    transect_ids = flat_transects['transect_ids']
+    las_sources = flat_transects['las_sources']
+
+    n_transects = len(mop_list)
+    n_epochs = len(epoch_files)
+    n_features = points.shape[2] if len(points) > 0 else 12
+    n_meta = metadata.shape[1] if len(metadata) > 0 else 12
+
+    # Create mappings
+    mop_to_idx = {mop: idx for idx, mop in enumerate(mop_list)}
+    epoch_to_idx = {Path(f).name: idx for idx, f in enumerate(epoch_files)}
+
+    # Parse dates for each epoch
+    epoch_dates = []
+    for f in epoch_files:
+        date = parse_date_from_filename(Path(f).name)
+        if date is None:
+            date = datetime(1970, 1, 1)
+            logger.warning(f"Could not parse date from {f}, using fallback")
+        epoch_dates.append(date)
+
+    logger.info(f"Unified cube dimensions: {n_transects} transects × {n_epochs} epochs")
+
+    # Initialize cube arrays with NaN
+    points_cube = np.full((n_transects, n_epochs, n_points, n_features), np.nan, dtype=np.float32)
+    distances_cube = np.full((n_transects, n_epochs, n_points), np.nan, dtype=np.float32)
+    metadata_cube = np.full((n_transects, n_epochs, n_meta), np.nan, dtype=np.float32)
+    coverage_mask = np.zeros((n_transects, n_epochs), dtype=bool)
+
+    # Track per-epoch statistics
+    epoch_valid_counts = np.zeros(n_epochs, dtype=int)
+    skipped_epochs = []
+
+    # Fill cube with extracted data
+    for i in range(len(points)):
+        # Parse MOP ID from transect ID string
+        tid_str = transect_ids[i]
+        mop_id = parse_mop_id(tid_str)
+        if mop_id is None or mop_id not in mop_to_idx:
+            continue
+
+        # Get epoch index
+        epoch_name = Path(las_sources[i]).name
+        if epoch_name not in epoch_to_idx:
+            continue
+
+        t_idx = mop_to_idx[mop_id]
+        e_idx = epoch_to_idx[epoch_name]
+
+        points_cube[t_idx, e_idx] = points[i]
+        distances_cube[t_idx, e_idx] = distances[i]
+        metadata_cube[t_idx, e_idx] = metadata[i]
+        coverage_mask[t_idx, e_idx] = True
+        epoch_valid_counts[e_idx] += 1
+
+    # Check for epochs with too few transects
+    for e_idx in range(n_epochs):
+        if epoch_valid_counts[e_idx] < min_transects_per_epoch:
+            if epoch_valid_counts[e_idx] > 0:
+                logger.warning(
+                    f"Epoch {e_idx} ({epoch_files[e_idx]}) has only "
+                    f"{epoch_valid_counts[e_idx]} transects (min: {min_transects_per_epoch}), "
+                    f"marking as skipped"
+                )
+                skipped_epochs.append(e_idx)
+
+    # Create timestamps array (1D - same for all transects)
+    timestamps = np.array([d.toordinal() for d in epoch_dates], dtype=np.int64)
+
+    # Get beach slices
+    beach_slices = get_beach_slices(mop_list)
+
+    # Calculate coverage statistics
+    total_cells = n_transects * n_epochs
+    filled_cells = coverage_mask.sum()
+    coverage_pct = 100 * filled_cells / total_cells if total_cells > 0 else 0
+
+    logger.info(f"Coverage: {filled_cells:,}/{total_cells:,} cells ({coverage_pct:.1f}%)")
+    logger.info(f"Skipped epochs (low coverage): {len(skipped_epochs)}")
+
+    # Per-beach coverage
+    for beach, (start, end) in beach_slices.items():
+        beach_coverage = coverage_mask[start:end].sum()
+        beach_total = (end - start) * n_epochs
+        beach_pct = 100 * beach_coverage / beach_total if beach_total > 0 else 0
+        logger.info(f"  {beach}: {beach_coverage:,}/{beach_total:,} ({beach_pct:.1f}%)")
+
+    return {
+        'points': points_cube,
+        'distances': distances_cube,
+        'metadata': metadata_cube,
+        'timestamps': timestamps,
+        'transect_ids': np.array(mop_list, dtype=np.int32),
+        'mop_ids': np.array(mop_list, dtype=np.int32),
+        'epoch_files': np.array([str(f) for f in epoch_files], dtype=object),
+        'epoch_dates': np.array([d.isoformat() for d in epoch_dates], dtype=object),
+        'epoch_mop_ranges': np.array(epoch_mop_ranges, dtype=np.int32),
+        'coverage_mask': coverage_mask,
+        'beach_slices': beach_slices,
+        'feature_names': flat_transects.get('feature_names', []),
+        'metadata_names': flat_transects.get('metadata_names', []),
+        'skipped_epochs': np.array(skipped_epochs, dtype=np.int32),
+        'epoch_valid_counts': epoch_valid_counts,
+    }
+
+
 def select_representative_transects(cube: Dict, n_samples: int = 4) -> np.ndarray:
     """Select representative transects spanning different cliff heights and locations.
 
@@ -888,13 +1108,29 @@ def main():
         help="REQUIRE .laz files instead of .las (faster loading, smaller files). Will error if LAZ not found.",
     )
 
+    parser.add_argument(
+        "--unified",
+        action="store_true",
+        help="Create unified cube with all beaches. Pre-defines transect and epoch dimensions "
+             "so partial-coverage surveys are included with NaN for missing transects. "
+             "Ignores --beach, --mop-min, --mop-max filters (processes all surveys).",
+    )
+
+    parser.add_argument(
+        "--min-transects",
+        type=int,
+        default=10,
+        help="Minimum valid transects per epoch to include (default: 10). "
+             "Epochs with fewer transects are marked as skipped.",
+    )
+
     args = parser.parse_args()
 
     # Print clean header
     print_header()
 
-    # Apply beach preset if specified
-    if args.beach:
+    # Apply beach preset if specified (ignored in unified mode)
+    if args.beach and not args.unified:
         mop_min, mop_max = BEACH_MOP_RANGES[args.beach]
         if args.mop_min is None:
             args.mop_min = mop_min
@@ -902,17 +1138,34 @@ def main():
             args.mop_max = mop_max
         logger.debug(f"Beach '{args.beach}' selected: MOP range {args.mop_min}-{args.mop_max}")
 
+    # In unified mode, print info about what we're doing
+    if args.unified:
+        print("UNIFIED MODE: Creating cube with all beaches")
+        mop_list = get_unified_mop_list()
+        print(f"  MOP range: {min(mop_list)} - {max(mop_list)} ({len(mop_list)} unique MOPs)")
+        beach_slices = get_beach_slices(mop_list)
+        for beach, (start, end) in beach_slices.items():
+            print(f"  {beach}: indices {start}-{end} ({end-start} MOPs)")
+        print()
+
     # Validate inputs
     if not args.transects.exists():
         logger.error(f"Transect shapefile not found: {args.transects}")
         return 1
 
-    # Collect LAS files
+    # Collect LAS files and MOP ranges
     las_files = []
+    epoch_mop_ranges = []  # Track MOP ranges for unified mode
+
     if args.las_files:
         las_files.extend(args.las_files)
+        # No MOP range info for direct files
+        epoch_mop_ranges.extend([(0, 9999)] * len(args.las_files))
     if args.las_dir:
-        las_files.extend(sorted(args.las_dir.glob(args.pattern)))
+        dir_files = sorted(args.las_dir.glob(args.pattern))
+        las_files.extend(dir_files)
+        epoch_mop_ranges.extend([(0, 9999)] * len(dir_files))
+
     if args.survey_csv:
         # Load LAS paths from CSV
         import pandas as pd
@@ -927,16 +1180,23 @@ def main():
             logger.error(f"Path column '{args.path_col}' not found in CSV. Available: {survey_df.columns.tolist()}")
             return 1
 
-        # Apply MOP range filters if specified
-        if args.mop_min is not None and 'MOP1' in survey_df.columns:
-            original_count = len(survey_df)
-            survey_df = survey_df[survey_df['MOP2'] >= args.mop_min]
-            logger.debug(f"Filtered MOP2 >= {args.mop_min}: {original_count} -> {len(survey_df)} rows")
+        # In unified mode, skip MOP filtering but require MOP columns
+        if args.unified:
+            if 'MOP1' not in survey_df.columns or 'MOP2' not in survey_df.columns:
+                logger.error("Unified mode requires MOP1 and MOP2 columns in survey CSV")
+                return 1
+            logger.info(f"Unified mode: using all {len(survey_df)} surveys (no MOP filtering)")
+        else:
+            # Apply MOP range filters if specified
+            if args.mop_min is not None and 'MOP1' in survey_df.columns:
+                original_count = len(survey_df)
+                survey_df = survey_df[survey_df['MOP2'] >= args.mop_min]
+                logger.debug(f"Filtered MOP2 >= {args.mop_min}: {original_count} -> {len(survey_df)} rows")
 
-        if args.mop_max is not None and 'MOP2' in survey_df.columns:
-            original_count = len(survey_df)
-            survey_df = survey_df[survey_df['MOP1'] <= args.mop_max]
-            logger.debug(f"Filtered MOP1 <= {args.mop_max}: {original_count} -> {len(survey_df)} rows")
+            if args.mop_max is not None and 'MOP2' in survey_df.columns:
+                original_count = len(survey_df)
+                survey_df = survey_df[survey_df['MOP1'] <= args.mop_max]
+                logger.debug(f"Filtered MOP1 <= {args.mop_max}: {original_count} -> {len(survey_df)} rows")
 
         # Extract paths and convert for current OS
         target_os = args.target_os if args.target_os else get_current_os()
@@ -951,6 +1211,14 @@ def main():
             csv_paths.append(Path(converted))
 
         las_files.extend(csv_paths)
+
+        # Store MOP ranges for each survey
+        if 'MOP1' in survey_df.columns and 'MOP2' in survey_df.columns:
+            for _, row in survey_df.iterrows():
+                epoch_mop_ranges.append((int(row['MOP1']), int(row['MOP2'])))
+        else:
+            epoch_mop_ranges.extend([(0, 9999)] * len(csv_paths))
+
         logger.debug(f"Added {len(csv_paths)} LAS files from CSV (target OS: {target_os})")
         if converted_count > 0:
             logger.debug(f"  Converted {converted_count} paths for {target_os}")
@@ -963,6 +1231,7 @@ def main():
     if args.limit is not None:
         original_count = len(las_files)
         las_files = las_files[:args.limit]
+        epoch_mop_ranges = epoch_mop_ranges[:args.limit]
         logger.debug(f"Limited to first {args.limit} of {original_count} LAS files (--limit)")
 
     # Substitute LAZ files if --prefer-laz is set
@@ -1019,6 +1288,23 @@ def main():
     # Load transect lines
     transect_gdf = extractor.load_transect_lines(args.transects)
 
+    # In unified mode, filter transects to only include MOPs in our defined ranges
+    if args.unified:
+        mop_list = get_unified_mop_list()
+        mop_set = set(mop_list)
+
+        # Filter transect_gdf to only include transects in our MOP list
+        original_count = len(transect_gdf)
+
+        def mop_in_list(transect_id):
+            mop_id = parse_mop_id(str(transect_id))
+            return mop_id is not None and mop_id in mop_set
+
+        mask = transect_gdf[args.transect_id_col].apply(mop_in_list)
+        transect_gdf = transect_gdf[mask].copy()
+
+        print(f"Filtered transects: {original_count} -> {len(transect_gdf)} (MOPs in study area)")
+
     # Extract transects (flat format)
     try:
         flat_transects = extractor.extract_from_shapefile_and_las(
@@ -1048,26 +1334,76 @@ def main():
     print()
 
     # Convert to cube format
-    print("Converting to cube format...")
-
-    cube = convert_flat_to_cube(flat_transects, n_points=args.n_points)
+    if args.unified:
+        print("Converting to UNIFIED cube format...")
+        mop_list = get_unified_mop_list()
+        cube = convert_flat_to_cube_unified(
+            flat_transects,
+            mop_list=mop_list,
+            epoch_files=las_files,
+            epoch_mop_ranges=epoch_mop_ranges,
+            n_points=args.n_points,
+            min_transects_per_epoch=args.min_transects,
+        )
+    else:
+        print("Converting to cube format...")
+        cube = convert_flat_to_cube(flat_transects, n_points=args.n_points)
 
     n_transects, n_epochs, n_points_cube, n_features = cube['points'].shape
 
     print("\n" + "="*70)
-    print("CUBE FORMAT")
+    if args.unified:
+        print("UNIFIED CUBE FORMAT")
+    else:
+        print("CUBE FORMAT")
     print("="*70)
     print(f"Shape: ({n_transects} transects, {n_epochs} epochs, {n_points_cube} points, {n_features} features)")
-    print(f"\nEpochs:")
-    for i, (name, date) in enumerate(zip(cube['epoch_names'], cube['epoch_dates'])):
-        print(f"  {i+1}. {date[:10]}")
 
-    # Statistics from latest epoch
+    # Show epochs (limit to first/last if many)
+    epoch_dates = cube['epoch_dates']
+    if n_epochs <= 20:
+        print(f"\nEpochs ({n_epochs} total):")
+        for i, date in enumerate(epoch_dates):
+            print(f"  {i+1}. {date[:10]}")
+    else:
+        print(f"\nEpochs ({n_epochs} total, showing first 5 and last 5):")
+        for i in range(5):
+            print(f"  {i+1}. {epoch_dates[i][:10]}")
+        print(f"  ...")
+        for i in range(n_epochs - 5, n_epochs):
+            print(f"  {i+1}. {epoch_dates[i][:10]}")
+
+    # Unified mode: show coverage statistics
+    if args.unified and 'coverage_mask' in cube:
+        coverage_mask = cube['coverage_mask']
+        total_cells = coverage_mask.size
+        filled_cells = coverage_mask.sum()
+        coverage_pct = 100 * filled_cells / total_cells if total_cells > 0 else 0
+
+        print(f"\nCoverage: {filled_cells:,}/{total_cells:,} cells ({coverage_pct:.1f}%)")
+
+        # Per-beach coverage
+        if 'beach_slices' in cube:
+            beach_slices = cube['beach_slices']
+            if isinstance(beach_slices, np.ndarray):
+                beach_slices = beach_slices.item()  # Convert from numpy
+            print("\nPer-beach coverage:")
+            for beach, (start, end) in beach_slices.items():
+                beach_coverage = coverage_mask[start:end].sum()
+                beach_total = (end - start) * n_epochs
+                beach_pct = 100 * beach_coverage / beach_total if beach_total > 0 else 0
+                print(f"  {beach}: {beach_pct:.1f}% ({end-start} transects)")
+
+        # Skipped epochs
+        if 'skipped_epochs' in cube and len(cube['skipped_epochs']) > 0:
+            print(f"\nSkipped epochs (< {args.min_transects} transects): {len(cube['skipped_epochs'])}")
+
+    # Statistics from latest epoch with valid data
     latest = n_epochs - 1
     cliff_heights = cube['metadata'][:, latest, 0]
     valid_heights = cliff_heights[~np.isnan(cliff_heights)]
     if len(valid_heights) > 0:
-        print(f"\nCliff heights (latest epoch):")
+        print(f"\nCliff heights (latest epoch with data):")
         print(f"  Range: {valid_heights.min():.1f} - {valid_heights.max():.1f} m")
         print(f"  Mean: {valid_heights.mean():.1f} ± {valid_heights.std():.1f} m")
 

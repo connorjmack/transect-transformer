@@ -355,16 +355,19 @@ def plot_study_site(
     gdf_rot = rotate_geometries(gdf_proj, rotation_angle, origin=rotation_center)
     
     # Calculate view limits from rotated data
+    # Use asymmetric buffer based on width to get more vertical extent
     rminx, rminy, rmaxx, rmaxy = gdf_rot.total_bounds
     rw, rh = rmaxx - rminx, rmaxy - rminy
+    # Use width-based buffer for vertical to make figure less elongated
+    vertical_buffer = rw * 0.12  # 12% of width for vertical padding
     view_bounds = (
-        rminx - rw * buffer_fraction,
-        rmaxx + rw * buffer_fraction,
-        rminy - rh * buffer_fraction,
-        rmaxy + rh * buffer_fraction
+        rminx - rw * buffer_fraction * 0.3,  # minimal buffer on left
+        rmaxx + rw * buffer_fraction * 0.3,  # minimal buffer on right
+        rminy - vertical_buffer * 1.2,        # more ocean at bottom
+        rmaxy + vertical_buffer * 1.0         # some land at top
     )
 
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=(12, 6))
 
     if use_basemap:
         add_satellite_basemap(ax, view_bounds, rotation_center, rotation_angle, zoom=basemap_zoom)

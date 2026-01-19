@@ -2,9 +2,11 @@
 
 ## Executive Summary
 
-CliffCast is a transformer-based deep learning model that predicts coastal cliff erosion risk by learning relationships between cliff geometry (from LiDAR transects), wave forcing, and precipitation history. The model uses cross-attention to identify which environmental conditions drive erosion, enabling both prediction and physical attribution.
+CliffCast is a transformer-based deep learning model that predicts coastal cliff erosion risk by learning relationships between multi-temporal cliff geometry (from LiDAR transects across multiple epochs), wave forcing, and precipitation history. The model uses spatio-temporal attention to learn cliff evolution patterns, followed by cross-attention to identify which environmental conditions drive erosion.
 
-**Core Innovation**: Cross-attention fusion allows the model to learn "which storm events matter for which cliff locations" - providing interpretable predictions grounded in physical processes.
+**Core Innovation**: Spatio-temporal attention over multiple LiDAR epochs captures cliff evolution (progressive weakening, crack development, precursor deformation), which is highly predictive of future failures. Cross-attention fusion then learns "which storm events matter for which cliff locations" - providing interpretable predictions grounded in physical processes.
+
+**Data Format**: Cube structure (n_transects, T, N, 12) where T = number of LiDAR epochs, enabling temporal attention across scans.
 
 **Scalability Target**: Process state-wide LiDAR datasets by operating on 1D transects rather than full 3D point clouds.
 
@@ -37,67 +39,80 @@ Phase 4: Add Failure Mode (requires labeled failure types)
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         CLIFFCAST ARCHITECTURE                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│    INPUTS                                                                    │
-│    ──────                                                                    │
-│    ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                  │
-│    │  Transect   │     │    Wave     │     │   Precip    │                  │
-│    │  (N, F_t)   │     │  (T_w, F_w) │     │  (T_p, F_p) │                  │
-│    └──────┬──────┘     └──────┬──────┘     └──────┬──────┘                  │
-│           │                   │                   │                          │
-│    ENCODERS                   │                   │                          │
-│    ────────                   │                   │                          │
-│           ▼                   ▼                   ▼                          │
-│    ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                  │
-│    │  Transect   │     │    Wave     │     │   Precip    │                  │
-│    │  Encoder    │     │   Encoder   │     │   Encoder   │                  │
-│    │ (N, d_model)│     │(T_w, d_model│     │(T_p, d_model│                  │
-│    └──────┬──────┘     └──────┬──────┘     └──────┬──────┘                  │
-│           │                   │                   │                          │
-│           │                   └─────────┬─────────┘                          │
-│           │                             │                                    │
-│           │                    ┌────────▼────────┐                           │
-│           │                    │   Concatenate   │                           │
-│           │                    │ Environmental   │                           │
-│           │                    │   Embeddings    │                           │
-│           │                    └────────┬────────┘                           │
-│           │                             │                                    │
-│    FUSION │                             │                                    │
-│    ──────                               │                                    │
-│           └──────────────┬──────────────┘                                    │
-│                          │                                                   │
-│                 ┌────────▼────────┐                                          │
-│                 │  Cross-Attention │                                         │
-│                 │     Fusion       │                                         │
-│                 │                  │                                         │
-│                 │ Q: cliff tokens  │                                         │
-│                 │ K,V: env tokens  │                                         │
-│                 └────────┬────────┘                                          │
-│                          │                                                   │
-│                 ┌────────▼────────┐                                          │
-│                 │  Global Pooling │                                          │
-│                 │  (N, d) → (d,)  │                                          │
-│                 └────────┬────────┘                                          │
-│                          │                                                   │
-│    PREDICTION HEADS      │                                                   │
-│    ────────────────      │                                                   │
-│           ┌──────────────┼──────────────┬──────────────┐                    │
-│           ▼              ▼              ▼              ▼                    │
-│    ┌─────────────┐┌─────────────┐┌─────────────┐┌─────────────┐            │
-│    │    Risk     ││  Collapse   ││   Retreat   ││   Failure   │            │
-│    │   Index     ││ Probability ││   Distance  ││    Mode     │            │
-│    │             ││             ││             ││             │            │
-│    │  (B, 1)     ││   (B, 4)    ││   (B, 1)    ││   (B, 5)    │            │
-│    │  σ output   ││  σ per head ││  softplus   ││  softmax    │            │
-│    └─────────────┘└─────────────┘└─────────────┘└─────────────┘            │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                    CLIFFCAST SPATIO-TEMPORAL ARCHITECTURE                         │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                   │
+│    INPUTS (CUBE FORMAT)                                                           │
+│    ────────────────────                                                           │
+│    ┌──────────────────┐     ┌─────────────┐     ┌─────────────┐                  │
+│    │    Transect      │     │    Wave     │     │   Precip    │                  │
+│    │   (T, N, F_t)    │     │  (T_w, F_w) │     │  (T_p, F_p) │                  │
+│    │  T=LiDAR epochs  │     │             │     │             │                  │
+│    └────────┬─────────┘     └──────┬──────┘     └──────┬──────┘                  │
+│             │                      │                   │                          │
+│    SPATIO-TEMPORAL ENCODER         │                   │                          │
+│    ───────────────────────         │                   │                          │
+│             ▼                      │                   │                          │
+│    ┌──────────────────┐            │                   │                          │
+│    │ Spatial Attention │            │                   │                          │
+│    │  (per timestep)   │            │                   │                          │
+│    │  N points → emb   │            │                   │                          │
+│    └────────┬─────────┘            │                   │                          │
+│             ▼                      │                   │                          │
+│    ┌──────────────────┐            │                   │                          │
+│    │Temporal Attention │            │                   │                          │
+│    │ (across epochs)   │            │                   │                          │
+│    │  T epochs → emb   │            │                   │                          │
+│    │  (T, d_model)     │            ▼                   ▼                          │
+│    └────────┬─────────┘     ┌─────────────┐     ┌─────────────┐                  │
+│             │               │    Wave     │     │   Precip    │                  │
+│             │               │   Encoder   │     │   Encoder   │                  │
+│             │               │(T_w, d_model│     │(T_p, d_model│                  │
+│             │               └──────┬──────┘     └──────┬──────┘                  │
+│             │                      │                   │                          │
+│             │                      └─────────┬─────────┘                          │
+│             │                                │                                    │
+│             │                       ┌────────▼────────┐                           │
+│             │                       │   Concatenate   │                           │
+│             │                       │ Environmental   │                           │
+│             │                       │   Embeddings    │                           │
+│             │                       └────────┬────────┘                           │
+│             │                                │                                    │
+│    FUSION   │                                │                                    │
+│    ──────   │                                │                                    │
+│             └───────────────┬────────────────┘                                    │
+│                             │                                                     │
+│                    ┌────────▼────────┐                                            │
+│                    │  Cross-Attention │                                           │
+│                    │     Fusion       │                                           │
+│                    │                  │                                           │
+│                    │ Q: temporal emb  │                                           │
+│                    │ K,V: env tokens  │                                           │
+│                    └────────┬────────┘                                            │
+│                             │                                                     │
+│                    ┌────────▼────────┐                                            │
+│                    │  Global Pooling │                                            │
+│                    │  (T, d) → (d,)  │                                            │
+│                    └────────┬────────┘                                            │
+│                             │                                                     │
+│    PREDICTION HEADS         │                                                     │
+│    ────────────────         │                                                     │
+│           ┌─────────────────┼─────────────────┬─────────────────┐                │
+│           ▼                 ▼                 ▼                 ▼                │
+│    ┌─────────────┐   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐        │
+│    │    Risk     │   │  Collapse   │   │   Retreat   │   │   Failure   │        │
+│    │   Index     │   │ Probability │   │   Distance  │   │    Mode     │        │
+│    │             │   │             │   │             │   │             │        │
+│    │  (B, 1)     │   │   (B, 4)    │   │   (B, 1)    │   │   (B, 5)    │        │
+│    │  σ output   │   │  σ per head │   │  softplus   │   │  softmax    │        │
+│    └─────────────┘   └─────────────┘   └─────────────┘   └─────────────┘        │
+│                                                                                   │
+└──────────────────────────────────────────────────────────────────────────────────┘
 
 Legend:
   B = batch size
+  T = number of LiDAR epochs per transect (e.g., 10 for 2017-2025)
   N = number of points per transect (e.g., 128)
   T_w = wave history timesteps (e.g., 360 for 90 days @ 6hr)
   T_p = precip history timesteps (e.g., 90 for 90 days @ daily)
@@ -109,17 +124,42 @@ Legend:
 
 ## Data Specifications
 
+### Data Format: Cube Structure
+
+Transect data is stored in a **cube format** to enable spatio-temporal attention:
+
+```python
+# Cube structure: (n_transects, T, N, 12)
+# where:
+#   n_transects = number of unique transect locations
+#   T = number of LiDAR epochs (e.g., 10 for 2017-2025 annual scans)
+#   N = 128 points per transect
+#   12 = number of per-point features
+
+# NPZ file structure after cube conversion:
+{
+    'points': (n_transects, T, N, 12),    # Point features cube
+    'distances': (n_transects, T, N),      # Distance along transect
+    'metadata': (n_transects, T, 12),      # Per-timestep metadata
+    'timestamps': (n_transects, T),        # Scan dates (for temporal encoding)
+    'transect_ids': (n_transects,),        # Unique transect IDs
+    'epoch_names': (T,),                   # LAS filenames for each epoch
+    'feature_names': [...],                # 12 feature names
+    'metadata_names': [...],               # 12 metadata field names
+}
+```
+
 ### Transect Input Features
 
-Each transect is resampled to N=128 points along a shore-normal profile.
+Each transect is resampled to N=128 points along a shore-normal profile, repeated across T temporal epochs.
 
 
 ### A note for later, EVENTUALLY the point cloud data will have classes for beach, rip rap, cliff face, vegetation, etc ### !!!!
 
-**Current Implementation**: `ShapefileTransectExtractor` extracts transects from LAS/LAZ files using predefined transect lines from shapefiles.
+**Current Implementation**: `ShapefileTransectExtractor` extracts transects from LAS/LAZ files using predefined transect lines from shapefiles. Output is then converted to cube format for the spatio-temporal model.
 
 ```python
-# Per-point features (shape: [N, 12])
+# Per-point features (shape: [T, N, 12] per transect)
 # Extracted by ShapefileTransectExtractor from LiDAR point clouds
 transect_features = {
     'distance_m': float,        # Distance from transect start (m), used for positional encoding
@@ -250,89 +290,143 @@ def compute_risk_index(retreat_m_yr: float, cliff_height_m: float) -> float:
 
 ## Model Components (Detailed)
 
-### 1. Transect Encoder
+### 1. Spatio-Temporal Transect Encoder
 
 ```python
-class TransectEncoder(nn.Module):
+class SpatioTemporalTransectEncoder(nn.Module):
     """
-    Encode transect point sequence using self-attention.
-    
+    Hierarchical attention encoder for multi-temporal cliff geometry.
+
     Key design choices:
-    - Distance-based positional encoding (not index-based)
+    - Spatial attention within each timestep (learns cliff geometry)
+    - Temporal attention across timesteps (learns cliff evolution)
+    - Distance-based positional encoding for spatial dimension
+    - Learned positional encoding for temporal dimension
     - Pre-norm transformer layers for stability
-    - Returns both per-point and pooled representations
+    - Returns fused spatio-temporal embeddings
     """
-    
+
     def __init__(
         self,
-        n_point_features: int = 12,  # Updated: 12 features from ShapefileTransectExtractor
-        n_meta_features: int = 12,   # Updated: 12 metadata fields
+        n_point_features: int = 12,  # 12 features from ShapefileTransectExtractor
+        n_meta_features: int = 12,   # 12 metadata fields
         d_model: int = 256,
         n_heads: int = 8,
-        n_layers: int = 4,
+        n_spatial_layers: int = 4,   # Layers for spatial attention
+        n_temporal_layers: int = 2,  # Layers for temporal attention
+        max_epochs: int = 20,        # Maximum number of LiDAR epochs
         dropout: float = 0.1,
     ):
         super().__init__()
-        
+
         # Project point features to model dimension
         self.point_embed = nn.Linear(n_point_features, d_model)
-        
+
         # Project metadata and broadcast to all points
         self.meta_embed = nn.Linear(n_meta_features, d_model)
-        
-        # Distance-based sinusoidal positional encoding
-        self.pos_encoding = SinusoidalPositionalEncoding(d_model)
-        
-        # Transformer encoder layers
-        encoder_layer = nn.TransformerEncoderLayer(
+
+        # Distance-based sinusoidal positional encoding (spatial)
+        self.spatial_pos_encoding = SinusoidalPositionalEncoding(d_model)
+
+        # Learned temporal positional encoding
+        self.temporal_pos_encoding = nn.Embedding(max_epochs, d_model)
+
+        # Spatial transformer (within each timestep)
+        spatial_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=4 * d_model,
             dropout=dropout,
             activation='gelu',
             batch_first=True,
-            norm_first=True,  # Pre-norm for stability
+            norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        
-        # Learnable [CLS] token for pooled representation
-        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
-        
+        self.spatial_transformer = nn.TransformerEncoder(
+            spatial_layer, num_layers=n_spatial_layers
+        )
+
+        # Temporal transformer (across timesteps)
+        temporal_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=4 * d_model,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True,
+        )
+        self.temporal_transformer = nn.TransformerEncoder(
+            temporal_layer, num_layers=n_temporal_layers
+        )
+
+        # Learnable [CLS] token for temporal pooling
+        self.temporal_cls = nn.Parameter(torch.randn(1, 1, d_model))
+
+        # Spatial pooling attention
+        self.spatial_pool_attn = nn.Linear(d_model, 1)
+
     def forward(
-        self, 
-        point_features: torch.Tensor,  # (B, N, n_point_features)
-        distances: torch.Tensor,        # (B, N) - distance from toe
-        metadata: torch.Tensor,         # (B, n_meta_features)
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self,
+        point_features: torch.Tensor,  # (B, T, N, n_point_features)
+        distances: torch.Tensor,        # (B, T, N) - distance from toe
+        metadata: torch.Tensor,         # (B, T, n_meta_features)
+        return_attention: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, dict | None]:
         """
         Returns:
-            point_embeddings: (B, N, d_model) - per-point representations
+            temporal_embeddings: (B, T, d_model) - per-epoch representations
             pooled: (B, d_model) - transect-level representation
+            attention: dict with spatial/temporal attention weights (optional)
         """
-        B, N, _ = point_features.shape
-        
-        # Embed point features
-        x = self.point_embed(point_features)  # (B, N, d_model)
-        
+        B, T, N, _ = point_features.shape
+
+        # === SPATIAL ATTENTION (per timestep) ===
+        # Reshape to process all timesteps in parallel: (B*T, N, F)
+        x = point_features.view(B * T, N, -1)
+        x = self.point_embed(x)  # (B*T, N, d_model)
+
         # Add metadata (broadcast to all points)
-        meta = self.meta_embed(metadata)  # (B, d_model)
-        x = x + meta.unsqueeze(1)  # (B, N, d_model)
-        
-        # Add positional encoding based on actual distances
-        x = x + self.pos_encoding(distances)  # (B, N, d_model)
-        
-        # Prepend CLS token
-        cls = self.cls_token.expand(B, -1, -1)  # (B, 1, d_model)
-        x = torch.cat([cls, x], dim=1)  # (B, N+1, d_model)
-        
-        # Self-attention
-        x = self.transformer(x)  # (B, N+1, d_model)
-        
-        # Split CLS and point embeddings
-        pooled = x[:, 0, :]           # (B, d_model)
-        point_embeddings = x[:, 1:, :] # (B, N, d_model)
-        
-        return point_embeddings, pooled
+        meta = self.meta_embed(metadata.view(B * T, -1))  # (B*T, d_model)
+        x = x + meta.unsqueeze(1)  # (B*T, N, d_model)
+
+        # Add spatial positional encoding based on distances
+        dist_flat = distances.view(B * T, N)
+        x = x + self.spatial_pos_encoding(dist_flat)  # (B*T, N, d_model)
+
+        # Spatial self-attention
+        x = self.spatial_transformer(x)  # (B*T, N, d_model)
+
+        # Spatial pooling: attention-weighted mean over points
+        attn_weights = F.softmax(self.spatial_pool_attn(x), dim=1)  # (B*T, N, 1)
+        spatial_pooled = (x * attn_weights).sum(dim=1)  # (B*T, d_model)
+
+        # Reshape back to (B, T, d_model)
+        temporal_input = spatial_pooled.view(B, T, -1)  # (B, T, d_model)
+
+        # === TEMPORAL ATTENTION (across timesteps) ===
+        # Add temporal positional encoding
+        time_positions = torch.arange(T, device=x.device)
+        temporal_input = temporal_input + self.temporal_pos_encoding(time_positions)
+
+        # Prepend temporal CLS token
+        cls = self.temporal_cls.expand(B, -1, -1)  # (B, 1, d_model)
+        temporal_seq = torch.cat([cls, temporal_input], dim=1)  # (B, T+1, d_model)
+
+        # Temporal self-attention
+        temporal_out = self.temporal_transformer(temporal_seq)  # (B, T+1, d_model)
+
+        # Split CLS and temporal embeddings
+        pooled = temporal_out[:, 0, :]              # (B, d_model)
+        temporal_embeddings = temporal_out[:, 1:, :] # (B, T, d_model)
+
+        attention = None
+        if return_attention:
+            attention = {
+                'spatial_pool_weights': attn_weights.view(B, T, N),
+                # Could add full attention matrices if needed
+            }
+
+        return temporal_embeddings, pooled, attention
 ```
 
 ### 2. Environmental Encoder
@@ -606,24 +700,32 @@ class PredictionHeads(nn.Module):
 ```python
 class CliffCast(nn.Module):
     """
-    Complete CliffCast model combining all components.
+    Complete CliffCast model with spatio-temporal architecture.
+
+    Processes multi-temporal transect data (cube format) through:
+    1. Spatio-temporal encoder (spatial + temporal attention)
+    2. Environmental encoders (wave + precip)
+    3. Cross-attention fusion
+    4. Multi-task prediction heads
     """
-    
+
     def __init__(self, config: dict):
         super().__init__()
-        
+
         d_model = config['d_model']
-        
-        # Encoders
-        self.transect_encoder = TransectEncoder(
+
+        # Spatio-temporal transect encoder
+        self.transect_encoder = SpatioTemporalTransectEncoder(
             n_point_features=config['n_point_features'],
             n_meta_features=config['n_meta_features'],
             d_model=d_model,
             n_heads=config['n_heads'],
-            n_layers=config['n_layers_transect'],
+            n_spatial_layers=config['n_spatial_layers'],
+            n_temporal_layers=config['n_temporal_layers'],
+            max_epochs=config.get('max_epochs', 20),
             dropout=config['dropout'],
         )
-        
+
         self.wave_encoder = EnvironmentalEncoder(
             n_features=config['n_wave_features'],
             d_model=d_model,
@@ -631,7 +733,7 @@ class CliffCast(nn.Module):
             n_layers=config['n_layers_env'],
             dropout=config['dropout'],
         )
-        
+
         self.precip_encoder = EnvironmentalEncoder(
             n_features=config['n_precip_features'],
             d_model=d_model,
@@ -639,15 +741,15 @@ class CliffCast(nn.Module):
             n_layers=config['n_layers_env'],
             dropout=config['dropout'],
         )
-        
-        # Fusion
+
+        # Fusion: temporal embeddings query environmental context
         self.fusion = CrossAttentionFusion(
             d_model=d_model,
             n_heads=config['n_heads'],
             n_layers=config['n_layers_fusion'],
             dropout=config['dropout'],
         )
-        
+
         # Prediction heads
         self.heads = PredictionHeads(
             d_model=d_model,
@@ -656,44 +758,47 @@ class CliffCast(nn.Module):
             enable_collapse=config.get('enable_collapse', True),
             enable_failure_mode=config.get('enable_failure_mode', True),
         )
-        
+
     def forward(
         self,
-        transect_points: torch.Tensor,
-        transect_distances: torch.Tensor,
-        transect_metadata: torch.Tensor,
-        wave_features: torch.Tensor,
-        wave_doy: torch.Tensor,
-        precip_features: torch.Tensor,
-        precip_doy: torch.Tensor,
+        transect_points: torch.Tensor,     # (B, T, N, 12) - cube format
+        transect_distances: torch.Tensor,  # (B, T, N)
+        transect_metadata: torch.Tensor,   # (B, T, 12)
+        wave_features: torch.Tensor,       # (B, T_w, 4)
+        wave_doy: torch.Tensor,            # (B, T_w)
+        precip_features: torch.Tensor,     # (B, T_p, 2)
+        precip_doy: torch.Tensor,          # (B, T_p)
         return_attention: bool = False,
     ) -> dict[str, torch.Tensor]:
         """
-        Full forward pass.
-        
-        Returns dict with prediction keys + optional 'attention' key.
+        Full forward pass with spatio-temporal processing.
+
+        Returns dict with prediction keys + optional attention keys.
         """
-        # Encode transect
-        point_emb, transect_pooled = self.transect_encoder(
-            transect_points, transect_distances, transect_metadata
+        # Encode transect with spatio-temporal attention
+        temporal_emb, transect_pooled, transect_attn = self.transect_encoder(
+            transect_points, transect_distances, transect_metadata,
+            return_attention=return_attention
         )
-        
+
         # Encode environmental
         wave_emb = self.wave_encoder(wave_features, wave_doy)
         precip_emb = self.precip_encoder(precip_features, precip_doy)
-        
+
         # Concatenate environmental embeddings
         env_emb = torch.cat([wave_emb, precip_emb], dim=1)
-        
-        # Cross-attention fusion
-        fused, attention = self.fusion(point_emb, env_emb, return_attention)
-        
-        # Predictions
+
+        # Cross-attention: temporal embeddings attend to environment
+        # This learns which environmental conditions affected each epoch
+        fused, env_attention = self.fusion(temporal_emb, env_emb, return_attention)
+
+        # Predictions from pooled representation
         outputs = self.heads(fused)
-        
+
         if return_attention:
-            outputs['attention'] = attention
-        
+            outputs['transect_attention'] = transect_attn
+            outputs['env_attention'] = env_attention
+
         return outputs
 ```
 
@@ -914,17 +1019,19 @@ transect-transformer/
 model:
   d_model: 256
   n_heads: 8
-  n_layers_transect: 4
-  n_layers_env: 3
-  n_layers_fusion: 2
+  n_spatial_layers: 4    # Layers for spatial attention (within timestep)
+  n_temporal_layers: 2   # Layers for temporal attention (across epochs)
+  n_layers_env: 3        # Layers for environmental encoders
+  n_layers_fusion: 2     # Layers for cross-attention fusion
+  max_epochs: 20         # Maximum LiDAR epochs supported
   dropout: 0.1
-  
+
   # Input dimensions
-  n_point_features: 5    # elevation, slope, curvature, roughness, aspect
-  n_meta_features: 7     # cliff_height, mean_slope, etc.
+  n_point_features: 12   # All 12 features from ShapefileTransectExtractor
+  n_meta_features: 12    # All 12 metadata fields
   n_wave_features: 4     # hs, tp, dp, power
   n_precip_features: 2   # daily_precip, cumulative
-  
+
   # Prediction heads (toggle for phased training)
   enable_risk: true
   enable_retreat: true
@@ -933,12 +1040,16 @@ model:
 
 # Data
 data:
-  n_transect_points: 128
+  # Cube format parameters
+  n_transect_points: 128  # N points per transect
+  n_lidar_epochs: 10      # T epochs per transect (e.g., 2017-2025)
+
+  # Environmental data
   wave_history_days: 90
   wave_timestep_hours: 6
   precip_history_days: 90
   precip_timestep_hours: 24
-  
+
   # Normalization
   normalize_elevation: true
   normalize_to_toe: true  # Set toe as origin
@@ -2030,20 +2141,23 @@ if hasattr(self, 'context_3d'):
 
 ---
 
-## Progress Summary (as of 2026-01-17)
+## Progress Summary (as of 2026-01-18)
 
 ### Completed Items
 ✅ **Project Structure**: All directories and base files created
 ✅ **Configuration System**: Full YAML-based config with validation
 ✅ **Transect Extraction**: Complete implementation with unit tests
 ✅ **Logging Utility**: Basic logging infrastructure
+✅ **Architecture Design**: Spatio-temporal encoder design complete
 
 ### In Progress
 🔄 **Phase 1 (Data Pipeline)**: 3/7 subsections complete
+🔄 **Cube Format Conversion**: Need utility to convert flat NPZ to cube format
 
 ### Remaining Work
 - Phase 1: Wave loader, precipitation loader, label generation, PyTorch dataset
-- Phase 2: Full model implementation (all encoders, fusion, heads)
+- Phase 1.5 (NEW): Implement flat-to-cube conversion utility
+- Phase 2: Full model implementation (SpatioTemporalTransectEncoder, environmental encoders, fusion, heads)
 - Phase 3: Training infrastructure (loss, trainer, scheduler)
 - Phase 4: Multi-task prediction heads
 - Phase 5: Evaluation metrics and baselines
@@ -2052,12 +2166,42 @@ if hasattr(self, 'context_3d'):
 
 ### Known Issues / Notes
 - ✅ ~~Transect extraction code is complete but not yet tested with real LiDAR data~~ → RESOLVED: Tested with MOPS data
+- ✅ ~~Architecture needs temporal attention~~ → RESOLVED: Spatio-temporal encoder designed
 - Need real wave and precipitation data sources configured
+- Need to implement flat-to-cube conversion for extracted transects
 - No training data prepared yet (need to run extraction on full MOPS dataset)
 
 ---
 
 ## Recent Updates
+
+### 2026-01-18: Spatio-Temporal Architecture Update
+
+**Major architectural change**: Updated model to use spatio-temporal attention for multi-epoch LiDAR data.
+
+**Motivation**: Temporal evolution of cliff geometry (progressive weakening, crack development, precursor deformation) is highly predictive of future failures. The previous architecture only processed single snapshots.
+
+**Key changes**:
+- **Data format**: Cube structure (n_transects, T, N, 12) instead of flat (n_samples, N, 12)
+  - T = number of LiDAR epochs (e.g., 10 for 2017-2025 annual scans)
+  - Full temporal coverage expected for each transect
+- **TransectEncoder → SpatioTemporalTransectEncoder**:
+  - Spatial attention within each timestep (learns cliff geometry)
+  - Temporal attention across timesteps (learns cliff evolution)
+  - Distance-based positional encoding for spatial dimension
+  - Learned positional encoding for temporal dimension
+- **Multi-scale attention for interpretability**:
+  - Temporal attention → which past scans matter for prediction
+  - Spatial attention → which cliff locations are critical
+  - Cross-attention → which environmental events drive erosion
+- **Updated config**: Added `n_spatial_layers`, `n_temporal_layers`, `max_epochs`, `n_lidar_epochs`
+
+**Benefits**:
+- Model can learn from cliff change patterns over time
+- More interpretable: can identify which historical scans and locations are predictive
+- Better aligned with physical understanding of cliff failure processes
+
+---
 
 ### 2026-01-18: Directory Restructuring & Transect Extraction Complete
 

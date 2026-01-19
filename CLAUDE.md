@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**CliffCast** is a transformer-based deep learning model for predicting coastal cliff erosion risk. The model processes 1D transect data from LiDAR scans along with environmental forcing data (wave conditions and precipitation) to predict multiple targets: risk index, collapse probability at multiple time horizons, expected retreat distance, and failure mode classification.
+**CliffCast** is a transformer-based deep learning model for predicting coastal cliff erosion risk. The model processes multi-temporal 1D transect data from LiDAR scans along with environmental forcing data (wave conditions and precipitation) to predict multiple targets: risk index, collapse probability at multiple time horizons, expected retreat distance, and failure mode classification.
 
-**Core Architecture**: Cross-attention fusion between cliff geometry embeddings (from transect encoder) and environmental embeddings (wave + precipitation encoders), followed by multi-task prediction heads.
+**Core Architecture**: Spatio-temporal attention over cliff geometry sequences (multiple LiDAR epochs per transect), followed by cross-attention fusion with environmental embeddings (wave + precipitation encoders), and multi-task prediction heads. The temporal dimension captures cliff evolution over time, which is critical for predicting future failures.
 
 ## Directory Structure
 
@@ -142,13 +142,17 @@ The transect viewer supports:
 
 ### Model Components
 
-1. **TransectEncoder** (`src/models/transect_encoder.py`): Self-attention encoder for cliff geometry
-   - Processes N=128 points per transect with 12 features from `ShapefileTransectExtractor`
+1. **SpatioTemporalTransectEncoder** (`src/models/transect_encoder.py`): Hierarchical attention encoder for multi-temporal cliff geometry
+   - **Input**: Cube format (B, T, N, 12) where T = number of LiDAR epochs, N = 128 points per transect
+   - **Spatial attention** (within each timestep): Self-attention over N=128 points to learn cliff geometry
+   - **Temporal attention** (across timesteps): Self-attention over T epochs to learn cliff evolution
    - Core geometric features: distance_m, elevation_m, slope_deg, curvature, roughness
    - LAS attributes: intensity, RGB, classification, return_number, num_returns
-   - Uses distance-based sinusoidal positional encoding (not index-based)
-   - Embeds transect-level metadata (12 fields) and broadcasts to all points
-   - Returns per-point embeddings and a pooled representation via learnable CLS token
+   - Uses distance-based sinusoidal positional encoding for spatial dimension
+   - Uses learned temporal positional encoding for time dimension
+   - Embeds transect-level metadata (12 fields) and broadcasts to all points/timesteps
+   - Returns fused spatio-temporal embeddings and a pooled representation via learnable CLS token
+   - **Key insight**: Temporal evolution of cliff geometry (progressive weakening, crack development) is highly predictive of future failures
 
 2. **EnvironmentalEncoder** (`src/models/environmental_encoder.py`): Time-series encoder for forcing data
    - Shared architecture for both wave and precipitation inputs
@@ -176,11 +180,17 @@ The transect viewer supports:
 
 ### Key Design Patterns
 
+- **Spatio-temporal hierarchy**: Spatial attention within timesteps, then temporal attention across timesteps
 - **Pre-norm transformers**: All transformer layers use pre-normalization for training stability
 - **Phased training**: Enable prediction heads incrementally (risk → retreat → collapse → failure mode)
-- **Distance-based positional encoding**: Transects use actual distance from cliff toe, not sequential indices
-- **Attention for interpretability**: Cross-attention weights identify which storms/events matter for predictions
+- **Distance-based spatial encoding**: Transects use actual distance from cliff toe, not sequential indices
+- **Learned temporal encoding**: LiDAR epochs use learned positional embeddings to capture temporal relationships
+- **Multi-scale attention for interpretability**:
+  - Temporal attention → which past scans matter for prediction
+  - Spatial attention → which cliff locations are critical
+  - Cross-attention → which environmental events drive erosion
 - **Multi-task learning**: Shared encoder backbone with task-specific heads and weighted loss combination
+- **Cube data format**: Transects stored as (n_transects, T, N, 12) to enable efficient temporal batching
 
 ### Data Components
 
@@ -202,18 +212,20 @@ The transect viewer supports:
 ### Data Flow
 
 ```
-Inputs:
-  - Transect: (B, N, 12) point features + (B, 12) metadata + (B, N) distances
-  - Wave: (B, T_w, 4) features + (B, T_w) day-of-year
-  - Precip: (B, T_p, 2) features + (B, T_p) day-of-year
+Inputs (Cube Format):
+  - Transect: (B, T, N, 12) point features + (B, T, 12) metadata + (B, T, N) distances
+    where T = number of LiDAR epochs (e.g., 10 for 2017-2025 annual scans)
+  - Timestamps: (B, T) scan dates for temporal encoding
+  - Wave: (B, T_w, 4) features + (B, T_w) day-of-year (aligned to most recent scan)
+  - Precip: (B, T_p, 2) features + (B, T_p) day-of-year (aligned to most recent scan)
 
 Pipeline:
-  1. Encode transect → (B, N, d_model)
-  2. Encode wave → (B, T_w, d_model)
-  3. Encode precip → (B, T_p, d_model)
-  4. Concatenate environmental → (B, T_w+T_p, d_model)
-  5. Cross-attention fusion → (B, N, d_model)
-  6. Attention pooling → (B, d_model)
+  1. Spatial attention (per timestep) → (B, T, N, d_model)
+  2. Temporal attention (across timesteps) → (B, T, d_model) or (B, N, d_model)
+  3. Encode wave → (B, T_w, d_model)
+  4. Encode precip → (B, T_p, d_model)
+  5. Concatenate environmental → (B, T_w+T_p, d_model)
+  6. Cross-attention fusion (cliff evolution queries environmental context) → (B, d_model)
   7. Prediction heads → dict of outputs
 
 Outputs:
@@ -221,7 +233,9 @@ Outputs:
   - p_collapse: (B, 4)
   - retreat_m: (B,)
   - failure_mode: (B, 5) logits
-  - attention: (B, n_heads, N, T_w+T_p) [optional]
+  - spatial_attention: (B, n_heads, T, N, N) [optional] - attention within timesteps
+  - temporal_attention: (B, n_heads, T, T) [optional] - attention across timesteps
+  - env_attention: (B, n_heads, T, T_w+T_p) [optional] - cross-attention to environment
 ```
 
 ## Critical Implementation Details
@@ -229,10 +243,13 @@ Outputs:
 ### Shape Expectations
 Always validate tensor shapes. Common shapes:
 - `B` = batch size (typically 32)
+- `T` = LiDAR epochs per transect (e.g., 10 for annual scans 2017-2025)
 - `N` = transect points (128)
 - `T_w` = wave timesteps (360 for 90 days @ 6hr)
 - `T_p` = precip timesteps (90 for 90 days @ daily)
 - `d_model` = hidden dimension (256)
+
+**Cube data format**: Transects stored as (n_transects, T, N, 12) where each transect has full temporal coverage across all LiDAR epochs.
 
 ### Loss Function
 `CliffCastLoss` in `src/training/losses.py` combines multiple objectives:
@@ -255,16 +272,32 @@ Sigmoid-normalized, centered at 1 m/yr retreat. Taller cliffs amplify risk.
 - **Transect extraction**: Use `ShapefileTransectExtractor` with predefined transect lines from shapefile
 - **Transect resampling**: Always N=128 points, uniformly spaced along transect profile
 - **Buffer distance**: Default 1.0m around transect line for point collection
+- **Cube format**: Transects organized as (n_transects, T, N, 12) data cube for spatio-temporal attention
+  - T = number of LiDAR epochs (all time steps for each transect)
+  - Each transect has full temporal coverage (no missing timesteps expected)
+  - `las_sources` array maps to timestamps for temporal encoding
 - **Feature normalization**: Intensity and RGB normalized to [0,1], classification as discrete codes
 - **Wave timesteps**: 6-hourly for capturing storm dynamics
 - **Precip timesteps**: Daily for antecedent moisture
+- **Temporal alignment**: Environmental data aligned to most recent scan date; model learns from full temporal sequence
 - **Missing data**: Interpolate or flag - never silently fill with zeros
 
 ### Attention Interpretation
-Cross-attention weights reveal physical attribution:
+Multiple attention mechanisms reveal different physical attributions:
+
+**Temporal attention** (across LiDAR epochs):
+- High attention to specific past scans → those epochs show critical cliff evolution
+- Identifies progressive weakening patterns, crack development, or precursor deformation
+- Use `return_temporal_attention=True` to visualize which historical scans matter most
+
+**Spatial attention** (within each timestep):
+- Identifies which cliff locations are most predictive (e.g., overhangs, notches)
+- Use `return_spatial_attention=True` to visualize per-point importance
+
+**Cross-attention** (cliff → environment):
 - High attention to specific wave timesteps → those storms contributed to erosion
 - Spatial patterns in cliff points attending to events → local vs. regional forcing
-- Use `return_attention=True` in model forward pass to extract weights for visualization
+- Use `return_env_attention=True` to extract weights for visualization
 
 ## Testing Strategy
 
@@ -318,13 +351,16 @@ Log to Weights & Biases:
 
 ## Common Pitfalls
 
-1. **Index vs. Distance**: Transect positional encoding uses distance from toe, NOT point index
-2. **Concatenation order**: Environmental embeddings are [wave, precip] not [precip, wave]
-3. **CLS token**: Prepended to sequence, so output has shape (B, N+1, d_model)
-4. **Failure mode loss**: Only computed on samples with `failure_mode > 0` (not stable)
-5. **Attention pooling**: Use learned attention weights, not simple mean pooling
-6. **Temporal alignment**: Match transect scan date to environmental window end date
-7. **Batch_first=True**: All transformers use `batch_first=True` convention
+1. **Index vs. Distance**: Transect spatial positional encoding uses distance from toe, NOT point index
+2. **Temporal ordering**: LiDAR epochs must be sorted chronologically; oldest first, newest last
+3. **Cube vs. Flat format**: Model expects (B, T, N, 12) cube format, not flat (B*T, N, 12)
+4. **Concatenation order**: Environmental embeddings are [wave, precip] not [precip, wave]
+5. **CLS token**: Prepended to sequence, so output has shape (B, T+1, d_model) after temporal attention
+6. **Failure mode loss**: Only computed on samples with `failure_mode > 0` (not stable)
+7. **Attention pooling**: Use learned attention weights, not simple mean pooling
+8. **Temporal alignment**: Environmental data aligned to most recent scan; model sees full history
+9. **Batch_first=True**: All transformers use `batch_first=True` convention
+10. **Full temporal coverage**: Each transect in batch should have same T epochs (pad if needed)
 
 ## Future Extensions
 

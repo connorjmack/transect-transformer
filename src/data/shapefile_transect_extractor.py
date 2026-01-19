@@ -351,7 +351,7 @@ class ShapefileTransectExtractor:
                 return copc_result
             # Fall through to chunked loading if COPC fails
 
-        logger.info(f"Loading LAS file (chunked spatial filter): {las_path}")
+        logger.debug(f"Loading LAS file (chunked spatial filter): {las_path}")
 
         # Collect filtered points from chunks
         xyz_chunks = []
@@ -452,10 +452,10 @@ class ShapefileTransectExtractor:
         }
 
         reduction_pct = 100 * (1 - total_kept / total_read) if total_read > 0 else 0
-        logger.info(f"Loaded {total_kept:,} of {total_read:,} points ({reduction_pct:.1f}% filtered out)")
-        logger.info(f"  X range: {xyz[:, 0].min():.2f} - {xyz[:, 0].max():.2f}")
-        logger.info(f"  Y range: {xyz[:, 1].min():.2f} - {xyz[:, 1].max():.2f}")
-        logger.info(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
+        logger.debug(f"Loaded {total_kept:,} of {total_read:,} points ({reduction_pct:.1f}% filtered out)")
+        logger.debug(f"  X range: {xyz[:, 0].min():.2f} - {xyz[:, 0].max():.2f}")
+        logger.debug(f"  Y range: {xyz[:, 1].min():.2f} - {xyz[:, 1].max():.2f}")
+        logger.debug(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
 
         return data
 
@@ -485,7 +485,7 @@ class ShapefileTransectExtractor:
             return None
 
         x_min, y_min, x_max, y_max = bounds
-        logger.info(f"Loading COPC file (fast spatial query): {las_path}")
+        logger.debug(f"Loading COPC file (fast spatial query): {las_path}")
 
         try:
             reader = CopcReader.open(str(las_path))
@@ -554,15 +554,140 @@ class ShapefileTransectExtractor:
                 'num_returns': num_returns,
             }
 
-            logger.info(f"COPC query returned {n_points:,} points (fast path)")
-            logger.info(f"  X range: {xyz[:, 0].min():.2f} - {xyz[:, 0].max():.2f}")
-            logger.info(f"  Y range: {xyz[:, 1].min():.2f} - {xyz[:, 1].max():.2f}")
-            logger.info(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
+            logger.debug(f"COPC query returned {n_points:,} points (fast path)")
+            logger.debug(f"  X range: {xyz[:, 0].min():.2f} - {xyz[:, 0].max():.2f}")
+            logger.debug(f"  Y range: {xyz[:, 1].min():.2f} - {xyz[:, 1].max():.2f}")
+            logger.debug(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
 
             return data
 
         except Exception as e:
             logger.warning(f"COPC query failed for {las_path}: {e}, falling back to chunked")
+            return None
+
+    def _extract_transect_copc_perquery(
+        self,
+        las_path: Path,
+        line: "LineString",
+        transect_id: int,
+    ) -> Optional[Dict[str, np.ndarray]]:
+        """Extract a single transect using per-transect COPC spatial query.
+
+        This is the most efficient approach for COPC files - queries only the
+        narrow buffer around one transect instead of loading all transects' points.
+
+        Args:
+            las_path: Path to COPC-enabled LAS/LAZ file
+            line: Transect LineString geometry
+            transect_id: Transect ID for metadata
+
+        Returns:
+            Resampled transect dict or None if extraction fails
+        """
+        try:
+            from laspy import CopcReader
+            from laspy.copc import Bounds
+        except ImportError:
+            return None
+
+        # Get transect bounds with buffer
+        bounds_gdf = gpd.GeoDataFrame([{'geometry': line}], crs='EPSG:2230')
+        transect_bounds = bounds_gdf.total_bounds  # (minx, miny, maxx, maxy)
+
+        x_min = transect_bounds[0] - self.buffer_m - 1
+        y_min = transect_bounds[1] - self.buffer_m - 1
+        x_max = transect_bounds[2] + self.buffer_m + 1
+        y_max = transect_bounds[3] + self.buffer_m + 1
+
+        try:
+            reader = CopcReader.open(str(las_path))
+
+            # Query narrow strip around this transect only
+            query_bounds = Bounds(
+                mins=np.array([x_min, y_min]),
+                maxs=np.array([x_max, y_max])
+            )
+            points = reader.query(bounds=query_bounds)
+
+            if len(points) == 0:
+                return None
+
+            # Convert to standard dict format
+            xyz = np.column_stack([points.x, points.y, points.z]).astype(np.float64)
+            n_points = len(xyz)
+
+            # Normalize intensity
+            if hasattr(points, 'intensity'):
+                intensity = np.asarray(points.intensity, dtype=np.float32)
+                max_int = intensity.max() if intensity.max() > 0 else 1
+                intensity /= max_int
+            else:
+                intensity = np.zeros(n_points, dtype=np.float32)
+
+            # Normalize RGB
+            if hasattr(points, 'red'):
+                red = np.asarray(points.red, dtype=np.float32) / 65535.0
+                green = np.asarray(points.green, dtype=np.float32) / 65535.0
+                blue = np.asarray(points.blue, dtype=np.float32) / 65535.0
+            else:
+                red = np.zeros(n_points, dtype=np.float32)
+                green = np.zeros(n_points, dtype=np.float32)
+                blue = np.zeros(n_points, dtype=np.float32)
+
+            # Classification
+            if hasattr(points, 'classification'):
+                classification = np.asarray(points.classification, dtype=np.float32)
+            else:
+                classification = np.zeros(n_points, dtype=np.float32)
+
+            # Return info
+            if hasattr(points, 'return_number'):
+                return_number = np.asarray(points.return_number, dtype=np.float32)
+            else:
+                return_number = np.ones(n_points, dtype=np.float32)
+
+            if hasattr(points, 'number_of_returns'):
+                num_returns = np.asarray(points.number_of_returns, dtype=np.float32)
+            else:
+                num_returns = np.ones(n_points, dtype=np.float32)
+
+            las_data = {
+                'xyz': xyz,
+                'x': xyz[:, 0],
+                'y': xyz[:, 1],
+                'z': xyz[:, 2],
+                'intensity': intensity,
+                'red': red,
+                'green': green,
+                'blue': blue,
+                'classification': classification,
+                'return_number': return_number,
+                'num_returns': num_returns,
+            }
+
+            # Build KDTree and extract transect points
+            tree = cKDTree(las_data['xyz'][:, :2])
+            raw_data = self.extract_transect_points(line, las_data, tree)
+
+            if raw_data is None:
+                return None
+
+            # Resample to fixed points
+            resampled = self.resample_transect(raw_data)
+
+            if resampled is None:
+                return None
+
+            # Set transect ID in metadata
+            try:
+                resampled['metadata'][9] = float(transect_id)
+            except (ValueError, TypeError):
+                pass
+
+            return resampled
+
+        except Exception as e:
+            logger.debug(f"Per-transect COPC query failed: {e}")
             return None
 
     def get_transect_direction(
@@ -908,35 +1033,8 @@ class ShapefileTransectExtractor:
                 'candidates': 0,
             }
 
-        # Calculate bounds of candidate transects (with buffer for spatial loading)
-        transect_total_bounds = candidate_transects.total_bounds  # (minx, miny, maxx, maxy)
-        load_bounds = (
-            transect_total_bounds[0] - self.buffer_m - 10,  # x_min with padding
-            transect_total_bounds[1] - self.buffer_m - 10,  # y_min with padding
-            transect_total_bounds[2] + self.buffer_m + 10,  # x_max with padding
-            transect_total_bounds[3] + self.buffer_m + 10,  # y_max with padding
-        )
-
-        # Load LAS data (use spatial filter for efficiency)
-        if use_spatial_filter:
-            las_data = self.load_las_file_spatial(las_path, load_bounds)
-            if las_data is None:
-                logger.debug(f"No points in bounds from {las_path.name}")
-                return {
-                    'features': [],
-                    'distances': [],
-                    'metadata': [],
-                    'transect_ids': [],
-                    'las_source': las_path.name,
-                    'extracted': 0,
-                    'skipped': 0,
-                    'candidates': len(candidate_transects),
-                }
-        else:
-            las_data = self.load_las_file(las_path)
-
-        # Build KDTree on XY coordinates
-        tree = cKDTree(las_data['xyz'][:, :2])
+        # Check if file is COPC and use per-transect queries (most efficient!)
+        is_copc = '.copc.' in las_path.name.lower()
 
         features = []
         distances = []
@@ -956,36 +1054,90 @@ class ShapefileTransectExtractor:
                 leave=False,
             )
 
-        for idx, row in iterator:
-            transect_id = row[transect_id_col] if transect_id_col in row.index else idx
-            line = row.geometry
+        if is_copc and use_spatial_filter:
+            # COPC fast path: Per-transect queries (best performance!)
+            logger.debug(f"Using COPC per-transect queries for {las_path.name} ({len(candidate_transects)} transects)")
 
-            # Extract raw points
-            raw_data = self.extract_transect_points(line, las_data, tree)
+            for idx, row in iterator:
+                transect_id = row[transect_id_col] if transect_id_col in row.index else idx
+                line = row.geometry
 
-            if raw_data is None:
-                skipped_count += 1
-                continue
+                # Query only points near this specific transect
+                resampled = self._extract_transect_copc_perquery(las_path, line, transect_id)
 
-            # Resample to fixed points
-            resampled = self.resample_transect(raw_data)
+                if resampled is None:
+                    skipped_count += 1
+                    continue
 
-            if resampled is None:
-                skipped_count += 1
-                continue
+                features.append(resampled['features'])
+                distances.append(resampled['distances'])
+                metadata.append(resampled['metadata'])
+                transect_ids.append(transect_id)
 
-            # Set transect ID in metadata
-            try:
-                resampled['metadata'][9] = float(transect_id)
-            except (ValueError, TypeError):
-                resampled['metadata'][9] = float(idx)
+                extracted_count += 1
 
-            features.append(resampled['features'])
-            distances.append(resampled['distances'])
-            metadata.append(resampled['metadata'])
-            transect_ids.append(transect_id)
+        else:
+            # Non-COPC path: Load all transects' points at once
+            # Calculate bounds of candidate transects (with buffer for spatial loading)
+            transect_total_bounds = candidate_transects.total_bounds  # (minx, miny, maxx, maxy)
+            load_bounds = (
+                transect_total_bounds[0] - self.buffer_m - 10,  # x_min with padding
+                transect_total_bounds[1] - self.buffer_m - 10,  # y_min with padding
+                transect_total_bounds[2] + self.buffer_m + 10,  # x_max with padding
+                transect_total_bounds[3] + self.buffer_m + 10,  # y_max with padding
+            )
 
-            extracted_count += 1
+            # Load LAS data (use spatial filter for efficiency)
+            if use_spatial_filter:
+                las_data = self.load_las_file_spatial(las_path, load_bounds)
+                if las_data is None:
+                    logger.debug(f"No points in bounds from {las_path.name}")
+                    return {
+                        'features': [],
+                        'distances': [],
+                        'metadata': [],
+                        'transect_ids': [],
+                        'las_source': las_path.name,
+                        'extracted': 0,
+                        'skipped': 0,
+                        'candidates': len(candidate_transects),
+                    }
+            else:
+                las_data = self.load_las_file(las_path)
+
+            # Build KDTree on XY coordinates
+            tree = cKDTree(las_data['xyz'][:, :2])
+
+            for idx, row in iterator:
+                transect_id = row[transect_id_col] if transect_id_col in row.index else idx
+                line = row.geometry
+
+                # Extract raw points
+                raw_data = self.extract_transect_points(line, las_data, tree)
+
+                if raw_data is None:
+                    skipped_count += 1
+                    continue
+
+                # Resample to fixed points
+                resampled = self.resample_transect(raw_data)
+
+                if resampled is None:
+                    skipped_count += 1
+                    continue
+
+                # Set transect ID in metadata
+                try:
+                    resampled['metadata'][9] = float(transect_id)
+                except (ValueError, TypeError):
+                    resampled['metadata'][9] = float(idx)
+
+                features.append(resampled['features'])
+                distances.append(resampled['distances'])
+                metadata.append(resampled['metadata'])
+                transect_ids.append(transect_id)
+
+                extracted_count += 1
 
         return {
             'features': features,
@@ -1038,7 +1190,7 @@ class ShapefileTransectExtractor:
         valid_las_files = []
         skipped_files = 0
 
-        logger.info(f"Pre-filtering {len(las_files)} LAS files by bounds...")
+        logger.debug(f"Pre-filtering {len(las_files)} LAS files by bounds...")
         for las_path in las_files:
             las_bounds = get_las_bounds(las_path)
             if las_bounds is None:

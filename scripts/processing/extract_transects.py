@@ -461,10 +461,10 @@ def convert_flat_to_cube(
     n_features = points.shape[2]
     n_meta = metadata.shape[1]
 
-    logger.info(f"Converting to cube format:")
-    logger.info(f"  Unique transects: {n_transects}")
-    logger.info(f"  Unique epochs: {n_epochs}")
-    logger.info(f"  Epochs (sorted): {sorted_epochs}")
+    logger.debug(f"Converting to cube format:")
+    logger.debug(f"  Unique transects: {n_transects}")
+    logger.debug(f"  Unique epochs: {n_epochs}")
+    logger.debug(f"  Epochs (sorted): {sorted_epochs}")
 
     # Create epoch index mapping
     epoch_to_idx = {epoch: idx for idx, epoch in enumerate(sorted_epochs)}
@@ -499,10 +499,9 @@ def convert_flat_to_cube(
     total_cells = n_transects * n_epochs
     if missing_count > 0:
         missing_pct = 100 * missing_count / total_cells
-        logger.warning(f"Missing data: {missing_count}/{total_cells} ({missing_pct:.1f}%) transect-epoch pairs")
-        logger.warning("Consider checking that all LAS files cover the same transects")
+        logger.debug(f"Missing data: {missing_count}/{total_cells} ({missing_pct:.1f}%) transect-epoch pairs")
     else:
-        logger.info(f"Full coverage: all {n_transects} transects present in all {n_epochs} epochs")
+        logger.debug(f"Full coverage: all {n_transects} transects present in all {n_epochs} epochs")
 
     return {
         'points': points_cube,
@@ -721,8 +720,19 @@ def save_cube(cube: Dict, output_path: Path) -> None:
 
     # Log cube dimensions
     n_transects, n_epochs, n_points, n_features = cube['points'].shape
-    logger.info(f"Saved cube to {output_path}")
-    logger.info(f"  Shape: ({n_transects} transects, {n_epochs} epochs, {n_points} points, {n_features} features)")
+    logger.debug(f"Saved cube to {output_path}")
+    logger.debug(f"  Shape: ({n_transects} transects, {n_epochs} epochs, {n_points} points, {n_features} features)")
+
+
+def print_header():
+    """Print clean header with timestamp."""
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("\n" + "="*70)
+    print("TRANSECT EXTRACTION")
+    print("="*70)
+    print(f"Started: {now}")
+    print()
 
 
 def main():
@@ -880,6 +890,9 @@ def main():
 
     args = parser.parse_args()
 
+    # Print clean header
+    print_header()
+
     # Apply beach preset if specified
     if args.beach:
         mop_min, mop_max = BEACH_MOP_RANGES[args.beach]
@@ -954,17 +967,14 @@ def main():
 
     # Substitute LAZ files if --prefer-laz is set
     if args.prefer_laz:
-        las_files, n_laz, n_copc = substitute_laz_files(las_files, verbose=True, require=True)
+        las_files, n_laz, n_copc = substitute_laz_files(las_files, verbose=False, require=True)
         if n_laz > 0:
-            logger.info(f"✓ Substituted {n_laz} files with LAZ versions (faster loading, smaller files)")
+            print(f"✓ Using {n_laz} LAZ files (compressed format)")
             if n_copc > 0:
-                logger.info(f"✓ Found {n_copc} LAZ files with COPC spatial index (10-100x faster loading!)")
-            else:
-                logger.info("  Note: LAZ files do not have COPC index. Consider creating COPC versions for even faster loading.")
+                print(f"✓ {n_copc} files have COPC spatial index (fast loading)")
         else:
-            logger.info("All files already LAZ format")
             if n_copc > 0:
-                logger.info(f"✓ {n_copc} files have COPC spatial index (10-100x faster loading!)")
+                print(f"✓ {n_copc} files have COPC spatial index (fast loading)")
 
     # Substitute COPC files if --prefer-copc is set
     if args.prefer_copc:
@@ -980,11 +990,24 @@ def main():
             logger.error(f"LAS file not found: {f}")
             return 1
 
-    logger.info(f"Found {len(las_files)} LAS file(s) to process (each = one temporal epoch)")
-    for f in las_files:
-        date = parse_date_from_filename(f.name)
-        date_str = date.strftime('%Y-%m-%d') if date else 'unknown'
-        logger.info(f"  - {f.name} (date: {date_str})")
+    print(f"Files to process: {len(las_files)} (each = one temporal epoch)")
+    if len(las_files) <= 10:
+        for f in las_files:
+            date = parse_date_from_filename(f.name)
+            date_str = date.strftime('%Y-%m-%d') if date else 'unknown'
+            print(f"  • {f.name} ({date_str})")
+    else:
+        # Just show first and last
+        for f in las_files[:3]:
+            date = parse_date_from_filename(f.name)
+            date_str = date.strftime('%Y-%m-%d') if date else 'unknown'
+            print(f"  • {f.name} ({date_str})")
+        print(f"  ... and {len(las_files) - 6} more ...")
+        for f in las_files[-3:]:
+            date = parse_date_from_filename(f.name)
+            date_str = date.strftime('%Y-%m-%d') if date else 'unknown'
+            print(f"  • {f.name} ({date_str})")
+    print()
 
     # Initialize extractor
     extractor = ShapefileTransectExtractor(
@@ -1016,48 +1039,37 @@ def main():
         logger.error("No transects extracted! Check that LAS files overlap with transect lines.")
         return 1
 
-    logger.info(f"\n{'='*60}")
-    logger.info(f"FLAT EXTRACTION SUMMARY")
-    logger.info(f"{'='*60}")
-    logger.info(f"  Total transect-epoch pairs extracted: {n_extracted}")
-    logger.info(f"  Points per transect: {args.n_points}")
-    logger.info(f"  Features per point: {extractor.N_FEATURES}")
-    logger.info(f"  Metadata fields: {extractor.N_METADATA}")
+    print("\n" + "="*70)
+    print("EXTRACTION SUMMARY")
+    print("="*70)
+    print(f"Transect-epoch pairs: {n_extracted:,}")
+    print(f"Points per transect: {args.n_points}")
+    print(f"Features per point: {extractor.N_FEATURES}")
+    print()
 
     # Convert to cube format
-    logger.info(f"\n{'='*60}")
-    logger.info(f"CONVERTING TO CUBE FORMAT")
-    logger.info(f"{'='*60}")
+    print("Converting to cube format...")
 
     cube = convert_flat_to_cube(flat_transects, n_points=args.n_points)
 
     n_transects, n_epochs, n_points_cube, n_features = cube['points'].shape
 
-    logger.info(f"\n{'='*60}")
-    logger.info(f"CUBE FORMAT SUMMARY")
-    logger.info(f"{'='*60}")
-    logger.info(f"  Cube shape: ({n_transects}, {n_epochs}, {n_points_cube}, {n_features})")
-    logger.info(f"  Unique transects: {n_transects}")
-    logger.info(f"  Temporal epochs: {n_epochs}")
-    logger.info(f"  Points per transect: {n_points_cube}")
-    logger.info(f"  Features per point: {n_features}")
-
-    # Print epoch info
-    logger.info(f"\n  Epochs (chronological):")
+    print("\n" + "="*70)
+    print("CUBE FORMAT")
+    print("="*70)
+    print(f"Shape: ({n_transects} transects, {n_epochs} epochs, {n_points_cube} points, {n_features} features)")
+    print(f"\nEpochs:")
     for i, (name, date) in enumerate(zip(cube['epoch_names'], cube['epoch_dates'])):
-        logger.info(f"    {i}: {date[:10]} - {name}")
-
-    # Print feature/metadata names
-    logger.info(f"\n  Feature names: {cube['feature_names']}")
-    logger.info(f"  Metadata names: {cube['metadata_names']}")
+        print(f"  {i+1}. {date[:10]}")
 
     # Statistics from latest epoch
     latest = n_epochs - 1
     cliff_heights = cube['metadata'][:, latest, 0]
     valid_heights = cliff_heights[~np.isnan(cliff_heights)]
     if len(valid_heights) > 0:
-        logger.info(f"\n  Cliff height range (latest epoch): {valid_heights.min():.1f} - {valid_heights.max():.1f} m")
-        logger.info(f"  Mean cliff height (latest epoch): {valid_heights.mean():.1f} m")
+        print(f"\nCliff heights (latest epoch):")
+        print(f"  Range: {valid_heights.min():.1f} - {valid_heights.max():.1f} m")
+        print(f"  Mean: {valid_heights.mean():.1f} ± {valid_heights.std():.1f} m")
 
     # Save cube
     save_cube(cube, args.output)
@@ -1125,7 +1137,16 @@ def main():
             import traceback
             traceback.print_exc()
 
-    logger.info(f"\nExtraction complete!")
+    # Final summary
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print("\n" + "="*70)
+    print("✓ EXTRACTION COMPLETE")
+    print("="*70)
+    print(f"Completed: {now}")
+    print(f"Output: {args.output}")
+    print(f"Size: {args.output.stat().st_size / 1024 / 1024:.1f} MB")
+    print()
     return 0
 
 

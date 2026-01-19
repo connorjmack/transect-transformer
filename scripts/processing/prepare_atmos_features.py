@@ -1,31 +1,33 @@
 #!/usr/bin/env python3
 """Prepare atmospheric features for CliffCast model training.
 
-This script processes raw PRISM climate data into the 25 atmospheric features
+This script processes raw PRISM climate data into the 24 atmospheric features
 used by the CliffCast model. Features are computed per-beach and saved as
 parquet files for efficient loading during training.
 
+Supports two input formats:
+1. PRISM Bulk Export (daily_4km/): Multiple yearly CSVs from bulk.php
+2. Legacy format: Individual {beach}_raw.csv files
+
 Usage:
-    # Process all beaches from raw PRISM extractions
+    # Process from PRISM bulk export (recommended)
+    python scripts/processing/prepare_atmos_features.py \
+        --bulk-dir data/raw/prism/daily_4km/ \
+        --output-dir data/processed/atmospheric/
+
+    # Process from legacy individual CSV files
     python scripts/processing/prepare_atmos_features.py \
         --raw-dir data/raw/prism/ \
         --output-dir data/processed/atmospheric/
 
     # Process specific beaches
     python scripts/processing/prepare_atmos_features.py \
-        --raw-dir data/raw/prism/ \
+        --bulk-dir data/raw/prism/daily_4km/ \
         --output-dir data/processed/atmospheric/ \
         --beaches delmar solana
 
-    # With custom date range (filter existing data)
-    python scripts/processing/prepare_atmos_features.py \
-        --raw-dir data/raw/prism/ \
-        --output-dir data/processed/atmospheric/ \
-        --start-date 2017-01-01 \
-        --end-date 2024-12-31
-
 Output:
-    Creates one parquet file per beach with all 25 atmospheric features:
+    Creates one parquet file per beach with all 24 atmospheric features:
     - data/processed/atmospheric/blacks_atmos.parquet
     - data/processed/atmospheric/torrey_atmos.parquet
     - data/processed/atmospheric/delmar_atmos.parquet
@@ -66,7 +68,7 @@ BEACH_COORDS = {
     'encinitas': (33.055, -117.285),
 }
 
-# Column mapping from PRISM variable names
+# Column mapping from PRISM variable names (legacy format)
 PRISM_COLUMNS = {
     'ppt': 'precip_mm',
     'tmin': 'temp_min_c',
@@ -74,6 +76,69 @@ PRISM_COLUMNS = {
     'tmean': 'temp_mean_c',
     'tdmean': 'dewpoint_c',
 }
+
+# Column mapping from PRISM bulk export format
+PRISM_BULK_COLUMNS = {
+    'ppt (mm)': 'precip_mm',
+    'tmin (degrees C)': 'temp_min_c',
+    'tmax (degrees C)': 'temp_max_c',
+    'tmean (degrees C)': 'temp_mean_c',
+    'tdmean (degrees C)': 'dewpoint_c',
+    'vpdmin (hPa)': 'vpdmin_hpa',
+    'vpdmax (hPa)': 'vpdmax_hpa',
+    'Date': 'date',
+    'Name': 'beach',
+}
+
+
+def load_prism_bulk_data(bulk_dir: Path) -> Dict[str, pd.DataFrame]:
+    """Load PRISM data from bulk export CSVs.
+
+    The bulk export format has:
+    - 10 header lines to skip
+    - All beaches in one file, differentiated by 'Name' column
+    - Multiple yearly files to merge
+
+    Args:
+        bulk_dir: Directory containing PRISM bulk CSV files
+
+    Returns:
+        Dictionary mapping beach names to DataFrames
+    """
+    csv_files = sorted(bulk_dir.glob('PRISM_*.csv'))
+
+    if not csv_files:
+        logger.warning(f"No PRISM CSV files found in {bulk_dir}")
+        return {}
+
+    logger.info(f"Found {len(csv_files)} PRISM bulk CSV files")
+
+    # Load and concatenate all files
+    dfs = []
+    for csv_path in csv_files:
+        logger.info(f"  Loading {csv_path.name}...")
+        df = pd.read_csv(csv_path, skiprows=10)
+        dfs.append(df)
+
+    combined = pd.concat(dfs, ignore_index=True)
+    logger.info(f"  Total records: {len(combined)}")
+
+    # Rename columns
+    combined = combined.rename(columns=PRISM_BULK_COLUMNS)
+
+    # Parse dates
+    combined['date'] = pd.to_datetime(combined['date'])
+
+    # Split by beach
+    beach_data = {}
+    for beach in combined['beach'].unique():
+        beach_df = combined[combined['beach'] == beach].copy()
+        beach_df = beach_df.drop(columns=['beach', 'Longitude', 'Latitude', 'Elevation (m)'])
+        beach_df = beach_df.sort_values('date').reset_index(drop=True)
+        beach_data[beach] = beach_df
+        logger.info(f"  {beach}: {len(beach_df)} records")
+
+    return beach_data
 
 
 def load_raw_beach_data(
@@ -285,6 +350,83 @@ def validate_output(output_dir: Path, beaches: List[str]) -> Dict[str, dict]:
     return results
 
 
+def process_bulk_data(
+    bulk_dir: Path,
+    output_dir: Path,
+    beaches: Optional[List[str]] = None,
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+) -> List[str]:
+    """Process PRISM bulk export data for all beaches.
+
+    Args:
+        bulk_dir: Directory containing PRISM bulk CSV files
+        output_dir: Directory to save processed parquet files
+        beaches: Optional list of beaches to process (default: all)
+        start_date: Optional filter start date
+        end_date: Optional filter end date
+
+    Returns:
+        List of successfully processed beach names
+    """
+    # Load all bulk data
+    beach_data = load_prism_bulk_data(bulk_dir)
+
+    if not beach_data:
+        logger.error("No data loaded from bulk files")
+        return []
+
+    # Filter beaches if specified
+    if beaches:
+        beach_data = {k: v for k, v in beach_data.items() if k in beaches}
+
+    processed = []
+    computer = AtmosFeatureComputer()
+
+    for beach, raw_df in beach_data.items():
+        logger.info(f"\nProcessing {beach}...")
+
+        # Filter by date range if specified
+        if start_date:
+            raw_df = raw_df[raw_df['date'] >= start_date]
+        if end_date:
+            raw_df = raw_df[raw_df['date'] <= end_date]
+
+        if len(raw_df) == 0:
+            logger.warning(f"  No data in specified date range for {beach}")
+            continue
+
+        logger.info(f"  Records: {len(raw_df)}")
+        logger.info(f"  Date range: {raw_df['date'].min().date()} to {raw_df['date'].max().date()}")
+
+        # Compute features
+        features_df = computer.compute_all_features(raw_df)
+
+        # Validate features
+        missing_features = set(ATMOS_FEATURE_NAMES) - set(features_df.columns)
+        if missing_features:
+            logger.warning(f"  Missing features: {missing_features}")
+
+        # Save to parquet
+        output_path = output_dir / f"{beach}_atmos.parquet"
+        features_df.to_parquet(output_path, index=False)
+
+        # Log summary
+        logger.info(f"  Output features: {len([c for c in features_df.columns if c != 'date'])}")
+
+        # Check for NaN values in non-lookback period
+        # (first 90 days will have NaN for rolling features)
+        valid_df = features_df[features_df['date'] >= features_df['date'].min() + pd.Timedelta(days=90)]
+        if len(valid_df) > 0:
+            nan_pct = 100 * valid_df.drop(columns=['date']).isna().mean().mean()
+            logger.info(f"  NaN % (after 90-day warmup): {nan_pct:.2f}%")
+
+        logger.info(f"  Saved: {output_path}")
+        processed.append(beach)
+
+    return processed
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Prepare atmospheric features for CliffCast',
@@ -292,12 +434,19 @@ def main():
         epilog=__doc__
     )
 
-    parser.add_argument(
+    # Input options (mutually exclusive)
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument(
+        '--bulk-dir',
+        type=Path,
+        help='Directory containing PRISM bulk export CSVs (from bulk.php)'
+    )
+    input_group.add_argument(
         '--raw-dir',
         type=Path,
-        default=Path('data/raw/prism'),
-        help='Directory containing raw PRISM CSV files'
+        help='Directory containing legacy individual beach CSV files'
     )
+
     parser.add_argument(
         '--output-dir',
         type=Path,
@@ -307,9 +456,8 @@ def main():
     parser.add_argument(
         '--beaches',
         nargs='+',
-        choices=list(BEACH_COORDS.keys()),
-        default=list(BEACH_COORDS.keys()),
-        help='Beaches to process (default: all)'
+        default=None,
+        help='Beaches to process (default: all found in data)'
     )
     parser.add_argument(
         '--start-date',
@@ -341,10 +489,13 @@ def main():
     # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Determine beaches to validate
+    beaches_to_validate = args.beaches or list(BEACH_COORDS.keys())
+
     if args.validate_only:
         # Validation only
         logger.info("Validating existing output files...")
-        results = validate_output(args.output_dir, args.beaches)
+        results = validate_output(args.output_dir, beaches_to_validate)
 
         for beach, info in results.items():
             if info['status'] == 'missing':
@@ -359,27 +510,46 @@ def main():
                 )
         return
 
-    # Process each beach
-    logger.info(f"Processing {len(args.beaches)} beaches...")
-    logger.info(f"Output directory: {args.output_dir}")
+    # Process data
+    if args.bulk_dir:
+        # Use bulk format
+        logger.info(f"Processing PRISM bulk data from {args.bulk_dir}")
+        logger.info(f"Output directory: {args.output_dir}")
 
-    processed = []
-    failed = []
-
-    for beach in args.beaches:
-        result = process_beach(
-            raw_dir=args.raw_dir,
+        processed = process_bulk_data(
+            bulk_dir=args.bulk_dir,
             output_dir=args.output_dir,
-            beach=beach,
+            beaches=args.beaches,
             start_date=start_date,
             end_date=end_date,
-            use_synthetic=args.synthetic,
         )
+        failed = [b for b in beaches_to_validate if b not in processed]
 
-        if result:
-            processed.append(beach)
-        else:
-            failed.append(beach)
+    elif args.raw_dir or args.synthetic:
+        # Use legacy format or synthetic data
+        raw_dir = args.raw_dir or Path('data/raw/prism')
+        logger.info(f"Processing {'synthetic' if args.synthetic else 'legacy'} data...")
+        logger.info(f"Output directory: {args.output_dir}")
+
+        processed = []
+        failed = []
+
+        for beach in beaches_to_validate:
+            result = process_beach(
+                raw_dir=raw_dir,
+                output_dir=args.output_dir,
+                beach=beach,
+                start_date=start_date,
+                end_date=end_date,
+                use_synthetic=args.synthetic,
+            )
+
+            if result:
+                processed.append(beach)
+            else:
+                failed.append(beach)
+    else:
+        parser.error("Must specify either --bulk-dir, --raw-dir, or --synthetic")
 
     # Summary
     logger.info("\n" + "=" * 50)
@@ -390,7 +560,7 @@ def main():
 
     # Validate output
     logger.info("\nValidating output...")
-    results = validate_output(args.output_dir, args.beaches)
+    results = validate_output(args.output_dir, processed)
 
     all_ok = all(r.get('status') == 'ok' for r in results.values())
     if all_ok:

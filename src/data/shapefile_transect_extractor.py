@@ -106,6 +106,33 @@ def bounds_overlap(
     )
 
 
+def is_copc_file(las_path: Path) -> bool:
+    """Check if LAS file has COPC spatial index (fast header check).
+
+    COPC (Cloud Optimized Point Cloud) files enable direct spatial queries
+    without scanning the entire file, providing 10-100x faster loading for
+    narrow spatial queries.
+
+    Args:
+        las_path: Path to LAS/LAZ file
+
+    Returns:
+        True if file has COPC VLR, False otherwise
+    """
+    if laspy is None:
+        return False
+
+    try:
+        with laspy.open(las_path) as f:
+            for vlr in f.header.vlrs:
+                if vlr.user_id == 'copc':
+                    return True
+        return False
+    except Exception as e:
+        logger.debug(f"Could not check COPC status for {las_path}: {e}")
+        return False
+
+
 def _extract_single_las_worker(
     las_path: Path,
     transect_gdf: "gpd.GeoDataFrame",

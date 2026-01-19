@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Critical Safety
+
+This project may connect to cloud servers with production data. NEVER:
+- Delete files in bulk (no `rm -rf`, `rm -r`, or recursive deletes)
+- Modify anything under `/data/production/`
+- Run commands that affect multiple files without explicit user approval
+- Force push to git repositories (`git push --force`)
+- Execute destructive operations on remote servers
+
 ## Project Overview
 
 **CliffCast** is a transformer-based deep learning model for predicting coastal cliff erosion risk. The model processes multi-temporal 1D transect data from LiDAR scans along with environmental forcing data (wave conditions and precipitation) to predict multiple targets: risk index, collapse probability at multiple time horizons, expected retreat distance, and failure mode classification.

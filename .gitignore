@@ -154,6 +154,7 @@ data/external/
 *.las
 *.tif
 *.tiff
+*.png
 *.nc
 *.hdf5
 *.h5

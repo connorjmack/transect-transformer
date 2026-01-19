@@ -4,8 +4,13 @@ import numpy as np
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
+from contextlib import contextmanager
 
-from src.data.shapefile_transect_extractor import ShapefileTransectExtractor
+from src.data.shapefile_transect_extractor import (
+    ShapefileTransectExtractor,
+    get_las_bounds,
+    bounds_overlap,
+)
 
 
 @pytest.fixture
@@ -386,15 +391,158 @@ class TestEdgeCases:
         assert result is None
 
 
+class TestBoundsHelpers:
+    """Test bounds checking helper functions."""
+
+    def test_bounds_overlap_true(self):
+        """Test that overlapping bounds are detected."""
+        bounds1 = (0, 0, 10, 10)
+        bounds2 = (5, 5, 15, 15)
+        assert bounds_overlap(bounds1, bounds2) is True
+
+    def test_bounds_overlap_false(self):
+        """Test that non-overlapping bounds are detected."""
+        bounds1 = (0, 0, 10, 10)
+        bounds2 = (20, 20, 30, 30)
+        assert bounds_overlap(bounds1, bounds2) is False
+
+    def test_bounds_overlap_touching(self):
+        """Test that touching bounds are considered overlapping."""
+        bounds1 = (0, 0, 10, 10)
+        bounds2 = (10, 0, 20, 10)
+        assert bounds_overlap(bounds1, bounds2) is True
+
+    def test_bounds_overlap_with_buffer(self):
+        """Test that buffer extends overlap detection."""
+        bounds1 = (0, 0, 10, 10)
+        bounds2 = (15, 0, 25, 10)  # 5m gap
+        assert bounds_overlap(bounds1, bounds2, buffer=0) is False
+        assert bounds_overlap(bounds1, bounds2, buffer=5) is True
+        assert bounds_overlap(bounds1, bounds2, buffer=10) is True
+
+    def test_bounds_overlap_contained(self):
+        """Test that contained bounds overlap."""
+        bounds1 = (0, 0, 100, 100)
+        bounds2 = (25, 25, 75, 75)
+        assert bounds_overlap(bounds1, bounds2) is True
+        assert bounds_overlap(bounds2, bounds1) is True
+
+    @patch('src.data.shapefile_transect_extractor.laspy')
+    def test_get_las_bounds(self, mock_laspy):
+        """Test getting bounds from LAS file header."""
+        # Mock the laspy.open context manager and header
+        mock_header = Mock()
+        mock_header.x_min = 100.0
+        mock_header.y_min = 200.0
+        mock_header.x_max = 150.0
+        mock_header.y_max = 250.0
+
+        mock_file = Mock()
+        mock_file.header = mock_header
+        mock_file.__enter__ = Mock(return_value=mock_file)
+        mock_file.__exit__ = Mock(return_value=False)
+
+        mock_laspy.open.return_value = mock_file
+
+        bounds = get_las_bounds(Path("test.las"))
+
+        assert bounds is not None
+        assert bounds == (100.0, 200.0, 150.0, 250.0)
+
+    @patch('src.data.shapefile_transect_extractor.laspy')
+    def test_get_las_bounds_error_returns_none(self, mock_laspy):
+        """Test that get_las_bounds returns None on error."""
+        mock_laspy.open.side_effect = Exception("File not found")
+
+        bounds = get_las_bounds(Path("nonexistent.las"))
+
+        assert bounds is None
+
+
+class TestSpatialLoading:
+    """Test spatial loading optimizations."""
+
+    @patch('src.data.shapefile_transect_extractor.get_las_bounds')
+    @patch('src.data.shapefile_transect_extractor.laspy')
+    def test_load_las_file_spatial_filters_points(
+        self, mock_laspy, mock_get_bounds, extractor
+    ):
+        """Test that spatial loading filters points correctly."""
+        # Mock bounds check to return overlapping
+        mock_get_bounds.return_value = (0, 0, 100, 100)
+
+        # Create synthetic point data - some inside bounds, some outside
+        n_points = 1000
+        np.random.seed(42)
+        x_all = np.random.uniform(-50, 150, n_points)  # Some outside [0, 100]
+        y_all = np.random.uniform(-50, 150, n_points)  # Some outside [0, 100]
+        z_all = np.random.uniform(0, 30, n_points)
+
+        # Create a mock chunk with the data
+        mock_chunk = Mock()
+        mock_chunk.x = x_all
+        mock_chunk.y = y_all
+        mock_chunk.z = z_all
+        mock_chunk.intensity = np.random.uniform(0, 65535, n_points).astype(np.uint16)
+        mock_chunk.red = np.random.uniform(0, 65535, n_points).astype(np.uint16)
+        mock_chunk.green = np.random.uniform(0, 65535, n_points).astype(np.uint16)
+        mock_chunk.blue = np.random.uniform(0, 65535, n_points).astype(np.uint16)
+        mock_chunk.classification = np.random.choice([2, 3, 5], n_points).astype(np.uint8)
+        mock_chunk.return_number = np.ones(n_points, dtype=np.uint8)
+        mock_chunk.number_of_returns = np.ones(n_points, dtype=np.uint8)
+        mock_chunk.__len__ = Mock(return_value=n_points)
+
+        # Mock the file context manager with chunk iterator
+        mock_file = Mock()
+        mock_file.chunk_iterator.return_value = iter([mock_chunk])
+        mock_file.__enter__ = Mock(return_value=mock_file)
+        mock_file.__exit__ = Mock(return_value=False)
+
+        mock_laspy.open.return_value = mock_file
+
+        # Load with spatial filter
+        bounds = (10, 10, 90, 90)  # Smaller than full data range
+        result = extractor.load_las_file_spatial(Path("test.las"), bounds)
+
+        assert result is not None
+
+        # All returned points should be within bounds
+        assert np.all(result['x'] >= bounds[0])
+        assert np.all(result['x'] <= bounds[2])
+        assert np.all(result['y'] >= bounds[1])
+        assert np.all(result['y'] <= bounds[3])
+
+        # Should have fewer points than total
+        assert len(result['x']) < n_points
+
+    @patch('src.data.shapefile_transect_extractor.get_las_bounds')
+    def test_load_las_file_spatial_no_overlap_returns_none(
+        self, mock_get_bounds, extractor
+    ):
+        """Test that no overlap returns None without reading points."""
+        # Mock bounds check to return non-overlapping
+        mock_get_bounds.return_value = (1000, 1000, 2000, 2000)
+
+        # Request bounds that don't overlap with LAS bounds
+        bounds = (0, 0, 10, 10)
+        result = extractor.load_las_file_spatial(Path("test.las"), bounds)
+
+        assert result is None
+
+
 class TestFullPipeline:
     """Integration tests for full extraction pipeline."""
 
+    @patch('src.data.shapefile_transect_extractor.get_las_bounds')
     @patch('src.data.shapefile_transect_extractor.laspy')
     def test_extract_from_shapefile_and_las(
-        self, mock_laspy, extractor, synthetic_gdf, synthetic_las_data
+        self, mock_laspy, mock_get_bounds, extractor, synthetic_gdf, synthetic_las_data
     ):
         """Test full extraction pipeline with mocked LAS file."""
-        # Mock the laspy.read call
+        # Mock bounds check to return bounds that overlap with synthetic data
+        mock_get_bounds.return_value = (0, 0, 60, 15)
+
+        # Mock the laspy.read call (used when use_spatial_filter=False)
         mock_las = Mock()
         mock_las.x = synthetic_las_data['x']
         mock_las.y = synthetic_las_data['y']
@@ -409,10 +557,11 @@ class TestFullPipeline:
 
         mock_laspy.read.return_value = mock_las
 
-        # Run extraction
+        # Run extraction with spatial filter disabled (simpler mocking)
         las_files = [Path("fake.las")]
         transects = extractor.extract_from_shapefile_and_las(
-            synthetic_gdf, las_files, transect_id_col='tr_id'
+            synthetic_gdf, las_files, transect_id_col='tr_id',
+            use_spatial_filter=False,
         )
 
         # Should extract some transects
@@ -434,6 +583,58 @@ class TestFullPipeline:
         assert not np.any(np.isnan(transects['points']))
         assert not np.any(np.isnan(transects['distances']))
         assert not np.any(np.isnan(transects['metadata']))
+
+    @patch('src.data.shapefile_transect_extractor.laspy')
+    @patch('src.data.shapefile_transect_extractor.get_las_bounds')
+    def test_prefilter_skips_non_overlapping_files(
+        self, mock_get_bounds, mock_laspy, extractor, synthetic_gdf, synthetic_las_data
+    ):
+        """Test that LAS files not overlapping transects are skipped."""
+        # get_las_bounds is called:
+        # 1. During pre-filtering for first file (overlaps)
+        # 2. During pre-filtering for second file (doesn't overlap)
+        # 3. During extract_single_las for the overlapping file
+        mock_get_bounds.side_effect = [
+            (0, 0, 60, 15),           # Pre-filter: overlaps with synthetic_gdf
+            (1000, 1000, 2000, 2000), # Pre-filter: far away, no overlap
+            (0, 0, 60, 15),           # extract_single_las: bounds check again
+        ]
+
+        # Mock laspy.read for when we load the overlapping file
+        mock_las = Mock()
+        mock_las.x = synthetic_las_data['x']
+        mock_las.y = synthetic_las_data['y']
+        mock_las.z = synthetic_las_data['z']
+        mock_las.intensity = (synthetic_las_data['intensity'] * 65535).astype(np.uint16)
+        mock_las.red = (synthetic_las_data['red'] * 65535).astype(np.uint16)
+        mock_las.green = (synthetic_las_data['green'] * 65535).astype(np.uint16)
+        mock_las.blue = (synthetic_las_data['blue'] * 65535).astype(np.uint16)
+        mock_las.classification = synthetic_las_data['classification'].astype(np.uint8)
+        mock_las.return_number = synthetic_las_data['return_number'].astype(np.uint8)
+        mock_las.number_of_returns = synthetic_las_data['num_returns'].astype(np.uint8)
+        mock_laspy.read.return_value = mock_las
+
+        las_files = [Path("overlapping.las"), Path("distant.las")]
+
+        # This should filter out the second file before loading
+        transects = extractor.extract_from_shapefile_and_las(
+            synthetic_gdf, las_files, transect_id_col='tr_id',
+            use_spatial_filter=False,
+        )
+
+        # Only one file should have been processed (the overlapping one)
+        # get_las_bounds called: 2 for pre-filtering + 1 for actual extraction
+        assert mock_get_bounds.call_count == 3
+
+        # laspy.read should only be called once (for overlapping.las)
+        assert mock_laspy.read.call_count == 1
+
+        # The distant file should have been skipped during pre-filtering
+        # Verify by checking the call args
+        call_paths = [str(call[0][0]) for call in mock_get_bounds.call_args_list]
+        assert 'overlapping.las' in call_paths[0]
+        assert 'distant.las' in call_paths[1]
+        assert 'overlapping.las' in call_paths[2]  # Called again during extraction
 
 
 class TestCubeFormat:

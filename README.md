@@ -1,26 +1,39 @@
-# CliffCast: Transformer-Based Coastal Cliff Erosion Prediction
+# CliffCast: Coastal Cliff Erosion Prediction
 
-CliffCast is a transformer-based deep learning model that predicts coastal cliff erosion risk by learning relationships between cliff geometry (from LiDAR transects), wave forcing, and precipitation history.
+**CliffCast** is a transformer-based deep learning model designed to predict coastal cliff erosion risk. It processes 1D transect data from LiDAR scans along with environmental forcing data (waves and precipitation) to predict erosion risk, collapse probability, and retreat distance.
 
-## Core Innovation
+## Current Status: Phase 1 (Data Pipeline & Visualization)
 
-Cross-attention fusion allows the model to learn "which storm events matter for which cliff locations" - providing interpretable predictions grounded in physical processes.
+The project is currently completing **Phase 1**. The data extraction pipeline is fully functional, capable of converting raw LiDAR (LAS/LAZ) data into structured 4D data cubes. A comprehensive interactive viewer has been built to validate and explore the processed data.
 
-## Features
+**Implemented Features:**
+- **LiDAR Transect Extraction**: Extracts elevation profiles from point clouds along defined shapefile normals.
+- **4D Data Cube Format**: Standardized `(N_transects, Time, Space, Features)` format.
+- **Interactive Transect Viewer**: Streamlit app for visualizing profile evolution, heatmaps, and data coverage.
+- **Cross-Platform Support**: Auto-handling of path differences between macOS and Linux environments.
+- **Data Utilities**: Scripts for subsetting data and managing survey metadata.
 
-- **Multi-task prediction**: Risk index, collapse probability (4 time horizons), expected retreat, and failure mode classification
-- **Interpretable attention**: Cross-attention weights reveal which environmental conditions drive erosion
-- **Scalable**: Operates on 1D transects rather than full 3D point clouds for state-wide processing
+## Project Structure
+
+```
+cliffcast/
+├── apps/
+│   └── transect_viewer/      # Streamlit application for data inspection
+├── configs/                  # YAML configuration files
+├── data/                     # Data directory (metadata, processed, raw)
+├── docs/
+│   └── ...
+├── scripts/
+│   ├── processing/
+│   └── visualization/
+├── src/
+│   ├── data/
+│   ├── utils/
+│   └── ...
+└── tests/
+```
 
 ## Installation
-
-### Requirements
-
-- Python 3.9+
-- PyTorch 2.0+
-- CUDA-capable GPU (recommended)
-
-### Install from source
 
 ```bash
 # Clone the repository
@@ -29,97 +42,59 @@ cd transect-transformer
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Or install in development mode
-pip install -e ".[dev]"
 ```
 
-## Quick Start
+## Usage
 
-### Training
+### 1. Interactive Transect Viewer
+Launch the Streamlit app to inspect processed `.npz` files:
 
 ```bash
-# Phase 1: Risk index only (validate architecture)
-python train.py --config configs/phase1_risk_only.yaml --data_dir data/processed/
-
-# Phase 4: Full model (all prediction heads)
-python train.py --config configs/phase4_full.yaml --data_dir data/processed/
+streamlit run apps/transect_viewer/app.py
 ```
 
-### Inference
+### 2. Extract Transects from LiDAR
+Extract profiles from LAS/LAZ files using a shapefile of transect lines:
 
 ```bash
-# Predict on new data
-python predict.py \
-    --input data/new_site/ \
-    --checkpoint checkpoints/best.pt \
-    --output results/ \
-    --format geojson
+python scripts/processing/extract_transects.py \
+    --transects data/mops/transects_10m/transect_lines.shp \
+    --las-dir /path/to/las/files \
+    --output data/processed/my_beach.npz \
+    --survey-csv data/metadata/master_survey_list.csv \
+    --beach "Torrey Pines"
 ```
 
-### Evaluation
+### 3. Subset Processed Data
+Filter an existing NPZ file by MOP range:
 
 ```bash
-# Evaluate on test set
-python evaluate.py \
-    --checkpoint checkpoints/best.pt \
-    --data_dir data/processed/ \
-    --split test \
-    --output results/
+python scripts/processing/subset_transects.py \
+    --input data/processed/all_beaches.npz \
+    --output data/processed/torrey_pines.npz \
+    --beach "Torrey Pines"
 ```
 
-## Project Structure
+## Development
 
-```
-cliffcast/
-├── src/
-│   ├── data/          # Data loading and preprocessing
-│   ├── models/        # Model architectures (encoders, fusion, heads)
-│   ├── training/      # Training loop, losses, callbacks
-│   ├── evaluation/    # Metrics, calibration, baselines
-│   ├── visualization/ # Attention maps, prediction plots
-│   ├── inference/     # Single and batch prediction
-│   └── utils/         # Logging, config, I/O utilities
-├── tests/             # Unit and integration tests
-├── configs/           # Model and training configurations
-├── scripts/           # Data download and preprocessing scripts
-└── notebooks/         # Jupyter notebooks for analysis
+### Running Tests
+The project maintains a high standard of testing with over 60 passing tests.
 
+```bash
+pytest tests/
 ```
 
-## Model Architecture
+### Documentation
+- [CLAUDE.md](CLAUDE.md): Developer guidelines and commands.
+- [docs/todo.md](docs/todo.md): Current task list and roadmap.
+- [docs/plan.md](docs/plan.md): Detailed architectural plan.
 
-The model consists of:
-
-1. **Transect Encoder**: Self-attention over cliff geometry points
-2. **Environmental Encoders**: Separate encoders for wave and precipitation time series
-3. **Cross-Attention Fusion**: Cliff embeddings attend to environmental conditions
-4. **Multi-Task Heads**: Four prediction heads sharing the fused representation
-
-See [plan.md](plan.md) for detailed architecture specifications.
-
-## Documentation
-
-- [CLAUDE.md](CLAUDE.md): Developer guide for working with this codebase
-- [plan.md](plan.md): Comprehensive implementation plan and architecture details
+## Next Steps (Phase 2)
+- Implement Model Architecture (`src/models`)
+    - SpatioTemporalTransectEncoder
+    - EnvironmentalEncoder
+    - CrossAttentionFusion
+- Develop Training Infrastructure (`src/training`)
 
 ## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-If you use CliffCast in your research, please cite:
-
-```bibtex
-@software{cliffcast2026,
-  title = {CliffCast: Transformer-Based Coastal Cliff Erosion Prediction},
-  author = {Mack, Connor J.},
-  year = {2026},
-  url = {https://github.com/connorjmack/transect-transformer}
-}
-```
-
-## Development Status
-
-This project is currently in **Phase 1: Project Setup & Data Pipeline**. See [plan.md](plan.md) for the full implementation roadmap.
+MIT

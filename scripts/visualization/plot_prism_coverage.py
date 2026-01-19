@@ -29,14 +29,14 @@ import pandas as pd
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
-# Beach coordinates (lat, lon)
+# Beach coordinates (lat, lon) - centroids from MOP transect shapefile
 BEACH_COORDS = {
-    'blacks': (32.885, -117.255),
-    'torrey': (32.920, -117.260),
-    'delmar': (32.960, -117.265),
-    'solana': (32.990, -117.270),
-    'sanelijo': (33.025, -117.280),
-    'encinitas': (33.055, -117.285),
+    'blacks': (32.893798, -117.253693),      # MOP 520-567
+    'torrey': (32.920009, -117.259033),      # MOP 567-581
+    'delmar': (32.949681, -117.265282),      # MOP 595-620
+    'solana': (32.988459, -117.274256),      # MOP 637-666
+    'sanelijo': (33.026229, -117.287640),    # MOP 683-708
+    'encinitas': (33.059110, -117.303186),   # MOP 708-764
 }
 
 # Beach display colors
@@ -104,10 +104,10 @@ def plot_spatial_coverage(
                     xytext=(5, 5), textcoords='offset points',
                     fontsize=9, fontweight='bold')
 
-    # Add PRISM grid approximation (4km ~ 0.036 degrees)
+    # Add PRISM grid approximation (4km ~ 0.0416667 degrees)
     grid_size = 0.0416667
-    lat_min, lat_max = 32.85, 33.10
-    lon_min, lon_max = -117.30, -117.20
+    lat_min, lat_max = 32.85, 33.12
+    lon_min, lon_max = -117.35, -117.20
 
     # Draw grid lines
     for lat in np.arange(lat_min, lat_max, grid_size):

@@ -6,6 +6,9 @@ high-quality gridded climate data at 4km resolution. This script downloads
 precipitation and temperature variables needed for the CliffCast atmospheric
 feature pipeline.
 
+**Storage mode**: Point-only extraction. Downloads each grid, extracts values
+at beach coordinates, then deletes the grid. Only CSV time series are stored.
+
 Usage:
     # Download for specific date range
     python scripts/processing/download_prism_data.py \
@@ -26,6 +29,13 @@ Usage:
         --variables ppt tmin tmax \
         --output data/raw/prism/
 
+    # Keep full TIF grids (for statewide expansion)
+    python scripts/processing/download_prism_data.py \
+        --start-date 2017-01-01 \
+        --end-date 2024-12-31 \
+        --keep-grids \
+        --output data/raw/prism/
+
 Variables downloaded:
     - ppt: Daily precipitation (mm)
     - tmin: Daily minimum temperature (°C)
@@ -37,7 +47,7 @@ Variables downloaded:
 import argparse
 import logging
 import os
-import struct
+import re
 import sys
 import time
 from datetime import datetime, timedelta
@@ -56,27 +66,44 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Beach coordinates for San Diego study area
+# Beach coordinates for San Diego study area (centroids from MOP transect shapefile)
+# Calculated from MOP transect midpoints for each beach's MOP range
 BEACH_COORDS = {
-    'blacks': (32.885, -117.255),
-    'torrey': (32.920, -117.260),
-    'delmar': (32.960, -117.265),
-    'solana': (32.990, -117.270),
-    'sanelijo': (33.025, -117.280),
-    'encinitas': (33.055, -117.285),
+    'blacks': (32.893798, -117.253693),      # MOP 520-567
+    'torrey': (32.920009, -117.259033),      # MOP 567-581
+    'delmar': (32.949681, -117.265282),      # MOP 595-620
+    'solana': (32.988459, -117.274256),      # MOP 637-666
+    'sanelijo': (33.026229, -117.287640),    # MOP 683-708
+    'encinitas': (33.059110, -117.303186),   # MOP 708-764
+}
+
+# Beach MOP ranges (for dynamic coordinate calculation)
+BEACH_MOP_RANGES = {
+    'blacks': (520, 567),
+    'torrey': (567, 581),
+    'delmar': (595, 620),
+    'solana': (637, 666),
+    'sanelijo': (683, 708),
+    'encinitas': (708, 764),
 }
 
 
 class PRISMDownloader:
-    """Download PRISM daily climate data.
+    """Download PRISM daily climate data with point-only extraction.
 
     PRISM provides daily gridded climate data at 4km resolution. Data is
-    distributed as BIL (Band Interleaved by Line) format files within
-    ZIP archives, accessible via anonymous HTTPS/FTP.
+    distributed as GeoTIFF files within ZIP archives, accessible via
+    anonymous HTTPS.
+
+    By default, this downloads each grid, extracts values at beach coordinates,
+    then deletes the grid to minimize storage. Use keep_grids=True to retain
+    full CONUS grids for statewide expansion.
 
     Attributes:
-        output_dir: Directory to save downloaded files
+        output_dir: Directory to save downloaded/extracted files
         variables: List of PRISM variables to download
+        keep_grids: Whether to retain full TIF grids after extraction
+        beach_coords: Dictionary of beach coordinates {name: (lat, lon)}
     """
 
     # PRISM data directory URL (anonymous access)
@@ -86,109 +113,181 @@ class PRISMDownloader:
     # Format: {BASE_URL}/{var}/daily/{year}/prism_{var}_us_25m_{YYYYMMDD}.zip
     DAILY_URL = "{base}/{var}/daily/{year}/prism_{var}_us_25m_{date}.zip"
 
-    # Available variables
-    VARIABLES = ['ppt', 'tmin', 'tmax', 'tmean', 'tdmean', 'vpdmin', 'vpdmax']
+    # Available variables (core set for CliffCast)
+    VARIABLES = ['ppt', 'tmin', 'tmax', 'tmean', 'tdmean']
 
     def __init__(
         self,
         output_dir: Path,
         variables: Optional[List[str]] = None,
+        keep_grids: bool = False,
+        beach_coords: Optional[Dict[str, Tuple[float, float]]] = None,
     ):
         """Initialize PRISM downloader.
 
         Args:
             output_dir: Directory to save downloaded files
-            variables: List of variables to download (default: all)
+            variables: List of variables to download (default: core 5)
+            keep_grids: Whether to keep full TIF grids (default: False)
+            beach_coords: Beach coordinates {name: (lat, lon)} (default: SD beaches)
         """
         self.output_dir = Path(output_dir)
         self.variables = variables or self.VARIABLES
+        self.keep_grids = keep_grids
+        self.beach_coords = beach_coords or BEACH_COORDS
 
         # Validate variables
+        all_vars = ['ppt', 'tmin', 'tmax', 'tmean', 'tdmean', 'vpdmin', 'vpdmax']
         for var in self.variables:
-            if var not in self.VARIABLES:
+            if var not in all_vars:
                 raise ValueError(
                     f"Unknown variable '{var}'. "
-                    f"Valid options: {self.VARIABLES}"
+                    f"Valid options: {all_vars}"
                 )
 
-        # Create output directories
-        for var in self.variables:
-            (self.output_dir / var).mkdir(parents=True, exist_ok=True)
+        # Create output directory
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def download_date_range(
+        # Create grid directories only if keeping grids
+        if self.keep_grids:
+            for var in self.variables:
+                (self.output_dir / var).mkdir(parents=True, exist_ok=True)
+
+    def download_and_extract(
         self,
         start_date: datetime,
         end_date: datetime,
-        skip_existing: bool = True,
         retry_count: int = 3,
         retry_delay: float = 5.0,
-    ) -> Dict[str, List[Path]]:
-        """Download PRISM data for a date range.
+    ) -> Dict[str, pd.DataFrame]:
+        """Download PRISM data and extract point values for all beaches.
+
+        This is the main entry point. For each date:
+        1. Downloads all variable grids
+        2. Extracts values at each beach coordinate
+        3. Deletes grids (unless keep_grids=True)
+        4. Accumulates results in DataFrames
 
         Args:
             start_date: Start date (inclusive)
             end_date: End date (inclusive)
-            skip_existing: Skip files that already exist
             retry_count: Number of retries on failure
             retry_delay: Delay between retries in seconds
 
         Returns:
-            Dictionary mapping variable names to lists of downloaded file paths
+            Dictionary mapping beach names to DataFrames with columns:
+            [date, ppt, tmin, tmax, tmean, tdmean]
         """
-        downloaded = {var: [] for var in self.variables}
+        import tempfile
+        import rasterio
+        from rasterio.transform import rowcol
+
+        # Initialize result accumulators
+        beach_data = {beach: [] for beach in self.beach_coords}
 
         # Generate date list
-        current = start_date
         dates = []
+        current = start_date
         while current <= end_date:
             dates.append(current)
             current += timedelta(days=1)
 
-        total_downloads = len(dates) * len(self.variables)
-        completed = 0
-
+        total_days = len(dates)
         logger.info(
-            f"Downloading PRISM data for {len(dates)} days, "
-            f"{len(self.variables)} variables ({total_downloads} files total)"
+            f"Downloading PRISM data for {total_days} days, "
+            f"{len(self.variables)} variables, {len(self.beach_coords)} beaches"
         )
+        if not self.keep_grids:
+            logger.info("Point-only mode: grids will be deleted after extraction")
 
-        for date in dates:
+        for day_idx, date in enumerate(dates):
+            # Dictionary to hold this day's values for each beach
+            day_values = {beach: {'date': date} for beach in self.beach_coords}
+
+            # Download and extract each variable
             for var in self.variables:
-                completed += 1
+                tif_path = None
+                try:
+                    # Download to temp file or permanent location
+                    if self.keep_grids:
+                        tif_path = self._get_output_path(var, date)
+                        if not tif_path.exists():
+                            self._download_single(var, date, tif_path, retry_count, retry_delay)
+                    else:
+                        # Download to temp file
+                        with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as tmp:
+                            tif_path = Path(tmp.name)
+                        self._download_single(var, date, tif_path, retry_count, retry_delay)
 
-                # Check if file exists
-                output_path = self._get_output_path(var, date)
-                if skip_existing and output_path.exists():
-                    downloaded[var].append(output_path)
-                    continue
+                    # Extract values for all beaches
+                    with rasterio.open(tif_path) as src:
+                        data = src.read(1)
+                        for beach, (lat, lon) in self.beach_coords.items():
+                            try:
+                                row, col = rowcol(src.transform, lon, lat)
+                                if 0 <= row < src.height and 0 <= col < src.width:
+                                    value = float(data[row, col])
+                                    if src.nodata is not None and value == src.nodata:
+                                        value = np.nan
+                                else:
+                                    value = np.nan
+                            except Exception:
+                                value = np.nan
+                            day_values[beach][var] = value
 
-                # Download with retries
-                success = False
-                for attempt in range(retry_count):
-                    try:
-                        self._download_single(var, date, output_path)
-                        downloaded[var].append(output_path)
-                        success = True
-                        break
-                    except (URLError, HTTPError) as e:
-                        logger.warning(
-                            f"Attempt {attempt + 1}/{retry_count} failed for "
-                            f"{var} {date.strftime('%Y-%m-%d')}: {e}"
-                        )
-                        if attempt < retry_count - 1:
-                            time.sleep(retry_delay)
+                except Exception as e:
+                    logger.warning(f"Failed to get {var} for {date.strftime('%Y-%m-%d')}: {e}")
+                    for beach in self.beach_coords:
+                        day_values[beach][var] = np.nan
 
-                if not success:
-                    logger.error(
-                        f"Failed to download {var} for {date.strftime('%Y-%m-%d')} "
-                        f"after {retry_count} attempts"
-                    )
+                finally:
+                    # Delete temp file if not keeping grids
+                    if not self.keep_grids and tif_path and tif_path.exists():
+                        try:
+                            tif_path.unlink()
+                        except Exception:
+                            pass
 
-                # Progress update
-                if completed % 100 == 0 or completed == total_downloads:
-                    logger.info(f"Progress: {completed}/{total_downloads} files")
+            # Append day's values to each beach's list
+            for beach in self.beach_coords:
+                beach_data[beach].append(day_values[beach])
 
-        return downloaded
+            # Progress update
+            if (day_idx + 1) % 10 == 0 or day_idx == total_days - 1:
+                logger.info(f"Progress: {day_idx + 1}/{total_days} days")
+
+        # Convert to DataFrames
+        result = {}
+        for beach, records in beach_data.items():
+            df = pd.DataFrame(records)
+            df['date'] = pd.to_datetime(df['date'])
+            # Ensure column order
+            cols = ['date'] + [v for v in self.variables if v in df.columns]
+            result[beach] = df[cols]
+
+        return result
+
+    def save_beach_csvs(
+        self,
+        beach_data: Dict[str, pd.DataFrame],
+        suffix: str = '_raw',
+    ) -> List[Path]:
+        """Save beach DataFrames to CSV files.
+
+        Args:
+            beach_data: Dictionary from download_and_extract()
+            suffix: Suffix for CSV filenames (default: '_raw')
+
+        Returns:
+            List of saved file paths
+        """
+        saved_paths = []
+        for beach, df in beach_data.items():
+            csv_path = self.output_dir / f"{beach}{suffix}.csv"
+            df.to_csv(csv_path, index=False)
+            saved_paths.append(csv_path)
+            logger.info(f"Saved: {csv_path} ({len(df)} records)")
+        return saved_paths
 
     def _get_output_path(self, var: str, date: datetime) -> Path:
         """Get output file path for a variable and date."""
@@ -200,11 +299,20 @@ class PRISMDownloader:
         var: str,
         date: datetime,
         output_path: Path,
+        retry_count: int = 3,
+        retry_delay: float = 5.0,
     ) -> None:
-        """Download a single PRISM file.
+        """Download a single PRISM file with retries.
 
-        Downloads ZIP file from PRISM data server and extracts the BIL file.
+        Downloads ZIP file from PRISM data server and extracts the GeoTIFF.
         Uses anonymous HTTPS access (no authentication required).
+
+        Args:
+            var: Variable name (ppt, tmin, etc.)
+            date: Date to download
+            output_path: Where to save the extracted TIF
+            retry_count: Number of retries on failure
+            retry_delay: Delay between retries in seconds
         """
         import zipfile
         import tempfile
@@ -221,40 +329,50 @@ class PRISMDownloader:
             date=date_str
         )
 
-        logger.debug(f"Downloading: {url}")
+        last_error = None
+        for attempt in range(retry_count):
+            tmp_path = None
+            try:
+                # Download to temporary file
+                with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+                    tmp_path = tmp.name
 
-        # Download to temporary file
-        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
-            tmp_path = tmp.name
+                urlretrieve(url, tmp_path)
 
-        try:
-            urlretrieve(url, tmp_path)
+                # Extract GeoTIFF file from ZIP
+                with zipfile.ZipFile(tmp_path, 'r') as zf:
+                    # Find the .tif file in the archive
+                    tif_files = [f for f in zf.namelist() if f.endswith('.tif')]
+                    if not tif_files:
+                        raise ValueError(f"No .tif file found in {url}")
 
-            # Extract GeoTIFF file from ZIP
-            with zipfile.ZipFile(tmp_path, 'r') as zf:
-                # Find the .tif file in the archive
-                tif_files = [f for f in zf.namelist() if f.endswith('.tif')]
-                if not tif_files:
-                    raise ValueError(f"No .tif file found in {url}")
+                    # Extract to output path
+                    tif_name = tif_files[0]
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-                # Extract to output directory
-                tif_name = tif_files[0]
-                output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(tif_name) as src:
+                        with open(output_path, 'wb') as dst:
+                            dst.write(src.read())
 
-                # Change output path to .tif extension
-                output_tif = output_path.with_suffix('.tif')
+                logger.debug(f"Downloaded: {var} {date_str}")
+                return  # Success
 
-                # Extract and rename to our standard naming
-                with zf.open(tif_name) as src:
-                    with open(output_tif, 'wb') as dst:
-                        dst.write(src.read())
+            except (URLError, HTTPError, Exception) as e:
+                last_error = e
+                if attempt < retry_count - 1:
+                    logger.debug(f"Retry {attempt + 1}/{retry_count} for {var} {date_str}: {e}")
+                    time.sleep(retry_delay)
 
-            logger.debug(f"Extracted: {output_tif}")
+            finally:
+                # Clean up temp file
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
 
-        finally:
-            # Clean up temp file
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        # All retries failed
+        raise last_error or Exception(f"Failed to download {var} for {date_str}")
 
     def extract_grid_value(
         self,
@@ -454,25 +572,15 @@ def main():
         nargs='+',
         choices=PRISMDownloader.VARIABLES,
         default=PRISMDownloader.VARIABLES,
-        help='Variables to download (default: all)'
+        help='Variables to download (default: ppt tmin tmax tmean tdmean)'
     )
 
-    # Download options
+    # Storage options
     parser.add_argument(
-        '--skip-existing',
+        '--keep-grids',
         action='store_true',
-        default=True,
-        help='Skip files that already exist (default: True)'
-    )
-    parser.add_argument(
-        '--force',
-        action='store_true',
-        help='Force re-download of existing files'
-    )
-    parser.add_argument(
-        '--extract-only',
-        action='store_true',
-        help='Skip download, only extract values from existing files'
+        help='Keep full CONUS TIF grids (for statewide expansion). '
+             'Default: point-only extraction, no TIF storage.'
     )
 
     args = parser.parse_args()
@@ -495,48 +603,35 @@ def main():
     downloader = PRISMDownloader(
         output_dir=args.output,
         variables=args.variables,
+        keep_grids=args.keep_grids,
     )
 
-    if args.extract_only:
-        # Extract values for all beaches
-        logger.info("Extracting values from existing files...")
-        for beach in BEACH_COORDS:
-            logger.info(f"Extracting time series for {beach}...")
-            df = downloader.extract_timeseries(beach, start_date, end_date)
+    # Download and extract
+    logger.info(
+        f"Downloading PRISM data from {start_date.date()} to {end_date.date()}"
+    )
+    logger.info(f"Variables: {', '.join(args.variables)}")
+    logger.info(f"Storage mode: {'keep grids' if args.keep_grids else 'point-only'}")
 
-            # Save to CSV
-            output_csv = args.output / f"{beach}_raw.csv"
-            df.to_csv(output_csv, index=False)
-            logger.info(f"Saved: {output_csv}")
+    try:
+        beach_data = downloader.download_and_extract(start_date, end_date)
 
-            # Show summary
-            logger.info(f"  Date range: {df['date'].min()} to {df['date'].max()}")
-            logger.info(f"  Records: {len(df)}")
-            for var in args.variables:
-                valid = df[var].notna().sum()
-                logger.info(f"  {var}: {valid}/{len(df)} valid values")
-    else:
-        # Download data
-        logger.info(
-            f"Downloading PRISM data from {start_date.date()} to {end_date.date()}"
-        )
+        # Save CSVs
+        saved_paths = downloader.save_beach_csvs(beach_data)
 
-        try:
-            downloaded = downloader.download_date_range(
-                start_date,
-                end_date,
-                skip_existing=not args.force,
+        # Summary
+        logger.info("\n=== Download Summary ===")
+        for beach, df in beach_data.items():
+            valid_pct = (df['ppt'].notna().sum() / len(df)) * 100
+            logger.info(
+                f"{beach:12s}: {len(df)} days, "
+                f"{valid_pct:.0f}% valid, "
+                f"precip range: {df['ppt'].min():.1f}-{df['ppt'].max():.1f} mm"
             )
 
-            # Summary
-            for var, files in downloaded.items():
-                logger.info(f"Downloaded {len(files)} files for {var}")
-
-        except NotImplementedError as e:
-            logger.error(str(e))
-            logger.info("\nAlternative: Use Google Earth Engine to download PRISM data.")
-            logger.info("See: https://developers.google.com/earth-engine/datasets/catalog/OREGONSTATE_PRISM_AN81d")
-            sys.exit(1)
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        sys.exit(1)
 
 
 if __name__ == '__main__':

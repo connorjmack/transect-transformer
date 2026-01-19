@@ -1052,8 +1052,8 @@ class ShapefileTransectExtractor:
                 'candidates': 0,
             }
 
-        # Check if file is COPC and use per-transect queries (most efficient!)
-        is_copc = '.copc.' in las_path.name.lower()
+        # Check if file is COPC (proper detection including VLR check)
+        is_copc = self._is_copc_file(las_path) if use_spatial_filter else False
 
         features = []
         distances = []
@@ -1063,39 +1063,63 @@ class ShapefileTransectExtractor:
         extracted_count = 0
         skipped_count = 0
 
-        # Optionally wrap with progress bar
-        iterator = candidate_transects.iterrows()
-        if show_progress and HAS_TQDM:
-            iterator = tqdm(
-                list(iterator),
-                desc=f"  {las_path.name[:30]}",
-                unit="transect",
-                leave=False,
-            )
+        if is_copc and use_spatial_filter:
+            # COPC fast path: Open reader once, query all transects
+            try:
+                from laspy import CopcReader
+            except ImportError:
+                is_copc = False  # Fall through to non-COPC path
 
         if is_copc and use_spatial_filter:
-            # COPC fast path: Per-transect queries (best performance!)
-            logger.debug(f"Using COPC per-transect queries for {las_path.name} ({len(candidate_transects)} transects)")
+            logger.debug(f"Using COPC fast path for {las_path.name} ({len(candidate_transects)} transects)")
 
-            for idx, row in iterator:
-                transect_id = row[transect_id_col] if transect_id_col in row.index else idx
-                line = row.geometry
+            try:
+                # Open COPC reader ONCE for all transects (major speedup!)
+                reader = CopcReader.open(str(las_path))
 
-                # Query only points near this specific transect
-                resampled = self._extract_transect_copc_perquery(las_path, line, transect_id)
+                # Optionally wrap with progress bar
+                iterator = candidate_transects.iterrows()
+                if show_progress and HAS_TQDM:
+                    iterator = tqdm(
+                        list(iterator),
+                        desc=f"  {las_path.name[:30]}",
+                        unit="transect",
+                        leave=False,
+                    )
 
-                if resampled is None:
-                    skipped_count += 1
-                    continue
+                for idx, row in iterator:
+                    transect_id = row[transect_id_col] if transect_id_col in row.index else idx
+                    line = row.geometry
 
-                features.append(resampled['features'])
-                distances.append(resampled['distances'])
-                metadata.append(resampled['metadata'])
-                transect_ids.append(transect_id)
+                    # Query only points near this specific transect using shared reader
+                    resampled = self._extract_transect_from_copc_reader(reader, line, transect_id)
 
-                extracted_count += 1
+                    if resampled is None:
+                        skipped_count += 1
+                        continue
 
-        else:
+                    features.append(resampled['features'])
+                    distances.append(resampled['distances'])
+                    metadata.append(resampled['metadata'])
+                    transect_ids.append(transect_id)
+
+                    extracted_count += 1
+
+                # Properly close the reader
+                reader.close()
+
+            except Exception as e:
+                logger.warning(f"COPC fast path failed for {las_path.name}: {e}, falling back to chunked loading")
+                # Reset and fall through to non-COPC path
+                features = []
+                distances = []
+                metadata = []
+                transect_ids = []
+                extracted_count = 0
+                skipped_count = 0
+                is_copc = False
+
+        if not is_copc or not use_spatial_filter:
             # Non-COPC path: Load all transects' points at once
             # Calculate bounds of candidate transects (with buffer for spatial loading)
             transect_total_bounds = candidate_transects.total_bounds  # (minx, miny, maxx, maxy)
@@ -1126,6 +1150,16 @@ class ShapefileTransectExtractor:
 
             # Build KDTree on XY coordinates
             tree = cKDTree(las_data['xyz'][:, :2])
+
+            # Create iterator with optional progress bar
+            iterator = candidate_transects.iterrows()
+            if show_progress and HAS_TQDM:
+                iterator = tqdm(
+                    list(iterator),
+                    desc=f"  {las_path.name[:30]}",
+                    unit="transect",
+                    leave=False,
+                )
 
             for idx, row in iterator:
                 transect_id = row[transect_id_col] if transect_id_col in row.index else idx

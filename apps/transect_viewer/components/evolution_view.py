@@ -273,17 +273,53 @@ def _render_temporal_heatmap(
     n_epochs = values.shape[0]
     n_points = values.shape[1]
 
-    # Create distance labels (sample to avoid clutter)
-    sample_interval = max(1, n_points // 10)
-    dist_labels = [f"{distances[0, i]:.0f}" for i in range(0, n_points, sample_interval)]
+    # Create a COMMON distance grid across all epochs
+    # Find the common distance range (intersection of all valid data)
+    all_min_dist = []
+    all_max_dist = []
+    for t in range(n_epochs):
+        valid_mask = ~np.isnan(values[t])
+        if valid_mask.any():
+            valid_distances = distances[t][valid_mask]
+            all_min_dist.append(valid_distances.min())
+            all_max_dist.append(valid_distances.max())
+
+    if not all_min_dist:
+        st.warning("No valid data for heatmap")
+        return
+
+    # Use the INTERSECTION of distance ranges for consistent comparison
+    common_min = max(all_min_dist)
+    common_max = min(all_max_dist)
+
+    if common_max <= common_min:
+        st.warning("No overlapping distance range across epochs")
+        return
+
+    # Create common distance grid
+    common_distances = np.linspace(common_min, common_max, n_points)
+
+    # Interpolate each epoch onto the common grid
+    interpolated_values = np.full((n_epochs, n_points), np.nan)
+    for t in range(n_epochs):
+        valid_mask = ~np.isnan(values[t])
+        if valid_mask.sum() > 1:
+            # Interpolate onto common grid
+            interpolated_values[t] = np.interp(
+                common_distances,
+                distances[t][valid_mask],
+                values[t][valid_mask],
+                left=np.nan,
+                right=np.nan
+            )
 
     # Epoch labels
     epoch_labels = [d[:10] if dates else f"E{i}" for i, d in enumerate(dates)] if dates else [f"E{i}" for i in range(n_epochs)]
 
-    # Create heatmap
+    # Create heatmap with actual distance values on x-axis
     fig = go.Figure(data=go.Heatmap(
-        z=values,
-        x=list(range(n_points)),
+        z=interpolated_values,
+        x=common_distances,
         y=epoch_labels,
         colorscale='RdBu_r' if feature_name == 'elevation_m' else 'Viridis',
         colorbar=dict(title=feature_name),
@@ -291,7 +327,7 @@ def _render_temporal_heatmap(
 
     fig.update_layout(
         title=f"{feature_name} Evolution Heatmap - Transect {transect_id}",
-        xaxis_title="Point Index (distance →)",
+        xaxis_title="Distance from Toe (m)",
         yaxis_title="Epoch",
         height=300 + n_epochs * 20,
     )

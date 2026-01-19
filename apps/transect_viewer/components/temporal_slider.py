@@ -103,8 +103,11 @@ def render_temporal_slider():
         st.error(str(e))
         return
 
+    # Compute fixed y-axis range from first epoch for consistent comparison
+    y_range = _get_fixed_y_range(data, transect_id, selected_feature, feature_names)
+
     # Main profile plot
-    _render_profile_plot(transect, selected_feature, feature_names, epoch_labels[slider_epoch])
+    _render_profile_plot(transect, selected_feature, feature_names, epoch_labels[slider_epoch], y_range)
 
     # Show context: small multiples of all epochs
     with st.expander("Show All Epochs Overview", expanded=False):
@@ -114,6 +117,31 @@ def render_temporal_slider():
 
     # Metadata at current epoch
     _render_epoch_metadata(transect, epoch_labels[slider_epoch])
+
+
+def _get_fixed_y_range(data: dict, transect_id: int, feature_name: str, feature_names: list) -> tuple:
+    """
+    Compute y-axis range from first epoch for consistent comparison.
+
+    Returns:
+        Tuple of (y_min, y_max) with padding
+    """
+    try:
+        # Get first epoch data
+        first_transect = get_transect_by_id(data, transect_id, epoch_idx=0)
+        feature_idx = feature_names.index(feature_name)
+        values = first_transect['points'][:, feature_idx]
+        valid = values[~np.isnan(values)]
+
+        if len(valid) == 0:
+            return None
+
+        y_min, y_max = float(valid.min()), float(valid.max())
+        padding = (y_max - y_min) * 0.1
+
+        return (y_min - padding, y_max + padding)
+    except Exception:
+        return None
 
 
 def _compute_days_between(epoch_dates: list, idx1: int, idx2: int) -> str:
@@ -129,7 +157,13 @@ def _compute_days_between(epoch_dates: list, idx1: int, idx2: int) -> str:
         return None
 
 
-def _render_profile_plot(transect: dict, feature_name: str, feature_names: list, epoch_label: str):
+def _render_profile_plot(
+    transect: dict,
+    feature_name: str,
+    feature_names: list,
+    epoch_label: str,
+    y_range: tuple = None
+):
     """Render the main profile plot for current epoch."""
     points = transect['points']
     distances = transect['distances']
@@ -160,8 +194,10 @@ def _render_profile_plot(transect: dict, feature_name: str, feature_names: list,
         showlegend=False,
     )
 
-    # Add range for consistency across epochs (optional)
-    # This helps see changes more clearly
+    # Fix y-axis range for consistent comparison across epochs
+    if y_range:
+        fig.update_yaxes(range=list(y_range))
+
     st.plotly_chart(fig, use_container_width=True)
 
 

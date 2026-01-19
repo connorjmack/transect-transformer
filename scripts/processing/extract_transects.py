@@ -49,6 +49,17 @@ from src.utils.logging import setup_logger
 
 logger = setup_logger(__name__, level="INFO")
 
+# Beach name to MOP range mapping (San Diego County)
+# These ranges match the transect shapefile definitions
+BEACH_MOP_RANGES = {
+    'blacks': (520, 567),
+    'torrey': (567, 581),
+    'delmar': (595, 620),
+    'solana': (637, 666),
+    'sanelijo': (683, 708),
+    'encinitas': (708, 764),
+}
+
 
 def parse_date_from_filename(filename: str) -> Optional[datetime]:
     """Parse date from LAS filename.
@@ -492,7 +503,52 @@ def main():
         help="Glob pattern for LAS files when using --las-dir (default: *.las)",
     )
 
+    parser.add_argument(
+        "--survey-csv",
+        type=Path,
+        default=None,
+        help="CSV file with survey list (must have 'full_path' column or use --path-col)",
+    )
+
+    parser.add_argument(
+        "--path-col",
+        type=str,
+        default="full_path",
+        help="Column name for LAS file paths in survey CSV (default: full_path)",
+    )
+
+    parser.add_argument(
+        "--mop-min",
+        type=int,
+        default=None,
+        help="Filter CSV to surveys covering MOPs >= this value (requires MOP1 column)",
+    )
+
+    parser.add_argument(
+        "--mop-max",
+        type=int,
+        default=None,
+        help="Filter CSV to surveys covering MOPs <= this value (requires MOP2 column)",
+    )
+
+    parser.add_argument(
+        "--beach",
+        type=str,
+        default=None,
+        choices=list(BEACH_MOP_RANGES.keys()),
+        help=f"Beach name to auto-set MOP range. Options: {', '.join(BEACH_MOP_RANGES.keys())}",
+    )
+
     args = parser.parse_args()
+
+    # Apply beach preset if specified
+    if args.beach:
+        mop_min, mop_max = BEACH_MOP_RANGES[args.beach]
+        if args.mop_min is None:
+            args.mop_min = mop_min
+        if args.mop_max is None:
+            args.mop_max = mop_max
+        logger.info(f"Beach '{args.beach}' selected: MOP range {args.mop_min}-{args.mop_max}")
 
     # Validate inputs
     if not args.transects.exists():
@@ -505,9 +561,38 @@ def main():
         las_files.extend(args.las_files)
     if args.las_dir:
         las_files.extend(sorted(args.las_dir.glob(args.pattern)))
+    if args.survey_csv:
+        # Load LAS paths from CSV
+        import pandas as pd
+        if not args.survey_csv.exists():
+            logger.error(f"Survey CSV not found: {args.survey_csv}")
+            return 1
+
+        survey_df = pd.read_csv(args.survey_csv)
+        logger.info(f"Loaded survey CSV with {len(survey_df)} rows")
+
+        if args.path_col not in survey_df.columns:
+            logger.error(f"Path column '{args.path_col}' not found in CSV. Available: {survey_df.columns.tolist()}")
+            return 1
+
+        # Apply MOP range filters if specified
+        if args.mop_min is not None and 'MOP1' in survey_df.columns:
+            original_count = len(survey_df)
+            survey_df = survey_df[survey_df['MOP2'] >= args.mop_min]
+            logger.info(f"Filtered MOP2 >= {args.mop_min}: {original_count} -> {len(survey_df)} rows")
+
+        if args.mop_max is not None and 'MOP2' in survey_df.columns:
+            original_count = len(survey_df)
+            survey_df = survey_df[survey_df['MOP1'] <= args.mop_max]
+            logger.info(f"Filtered MOP1 <= {args.mop_max}: {original_count} -> {len(survey_df)} rows")
+
+        # Extract paths
+        csv_paths = [Path(p) for p in survey_df[args.path_col].tolist()]
+        las_files.extend(csv_paths)
+        logger.info(f"Added {len(csv_paths)} LAS files from CSV")
 
     if not las_files:
-        logger.error("No LAS files specified. Use --las-dir or --las-files")
+        logger.error("No LAS files specified. Use --las-dir, --las-files, or --survey-csv")
         return 1
 
     # Check all files exist

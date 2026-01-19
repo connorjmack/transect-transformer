@@ -542,8 +542,12 @@ class ShapefileTransectExtractor:
                     skipped_count += 1
                     continue
 
-                # Set transect ID in metadata
-                resampled['metadata'][9] = float(transect_id)
+                # Set transect ID in metadata (use index if ID is not numeric)
+                try:
+                    resampled['metadata'][9] = float(transect_id)
+                except (ValueError, TypeError):
+                    # String IDs stored separately in transect_ids array
+                    resampled['metadata'][9] = float(idx)
 
                 all_features.append(resampled['features'])
                 all_distances.append(resampled['distances'])
@@ -561,7 +565,7 @@ class ShapefileTransectExtractor:
                 'points': np.zeros((0, self.n_points, self.N_FEATURES), dtype=np.float32),
                 'distances': np.zeros((0, self.n_points), dtype=np.float32),
                 'metadata': np.zeros((0, self.N_METADATA), dtype=np.float32),
-                'transect_ids': np.array([], dtype=np.int64),
+                'transect_ids': np.array([], dtype=object),
                 'las_sources': [],
                 'feature_names': self.FEATURE_NAMES,
                 'metadata_names': self.METADATA_NAMES,
@@ -571,7 +575,7 @@ class ShapefileTransectExtractor:
             'points': np.stack(all_features),
             'distances': np.stack(all_distances),
             'metadata': np.stack(all_metadata),
-            'transect_ids': np.array(all_transect_ids, dtype=np.int64),
+            'transect_ids': np.array(all_transect_ids, dtype=object),
             'las_sources': all_las_sources,
             'feature_names': self.FEATURE_NAMES,
             'metadata_names': self.METADATA_NAMES,

@@ -12,6 +12,43 @@ CliffCast is a transformer-based deep learning model that predicts coastal cliff
 
 ---
 
+## Study Site: San Diego County Beaches
+
+The project covers coastal cliffs in San Diego County, California. Transects are identified by MOP (Monitoring Point) IDs from the MOPS (Monitoring and Prediction System) program.
+
+### Beach Definitions (Canonical MOP Ranges)
+
+| Beach | MOP Range | Description |
+|-------|-----------|-------------|
+| **Blacks** | 520-567 | Black's Beach - steep, tall cliffs below Torrey Pines |
+| **Torrey** | 567-581 | Torrey Pines State Beach - sandstone bluffs |
+| **Del Mar** | 595-620 | Del Mar city beaches - mixed geology |
+| **Solana** | 637-666 | Solana Beach - active erosion zone |
+| **San Elijo** | 683-708 | San Elijo State Beach - Cardiff area |
+| **Encinitas** | 708-764 | Encinitas/Moonlight Beach - northern extent |
+
+**IMPORTANT**: These MOP ranges are canonical and defined in `scripts/processing/extract_transects.py`. Use the `--beach` argument when extracting data:
+
+```bash
+python scripts/processing/extract_transects.py \
+    --transects data/mops/transects_10m/transect_lines.shp \
+    --survey-csv data/survey_lists/master_list.csv \
+    --beach delmar \
+    --output data/processed/delmar.npz
+```
+
+### Data Organization
+
+Survey data is organized in `data/survey_lists/master_list.csv` with columns:
+- `date`: Survey date (YYYYMMDD)
+- `MOP1`, `MOP2`: MOP range covered by survey
+- `full_path`: Path to LAS file
+- `method`: Survey method (e.g., VMZ2000_Truck)
+
+Recommend processing one beach at a time to keep NPZ files manageable (<500MB each).
+
+---
+
 ## Prediction Heads (4 Total)
 
 The model outputs four complementary predictions from a shared encoder backbone:

@@ -113,6 +113,16 @@ python scripts/processing/extract_transects.py \
     --n-points 128 \
     --visualize
 
+# Extract transects from survey CSV (recommended for large datasets)
+python scripts/processing/extract_transects.py \
+    --transects data/mops/transects_10m/transect_lines.shp \
+    --survey-csv data/survey_lists/master_list.csv \
+    --beach delmar \
+    --output data/processed/delmar.npz
+
+# Available --beach options: blacks, torrey, delmar, solana, sanelijo, encinitas
+# Or use --mop-min and --mop-max for custom ranges
+
 # Download wave data
 python scripts/download_wave_data.py --buoy_id 100 --start_date 2023-01-01 --end_date 2024-01-01
 
@@ -267,6 +277,27 @@ def compute_risk_index(retreat_m_yr: float, cliff_height_m: float) -> float:
     return float(np.clip(risk, 0, 1))
 ```
 Sigmoid-normalized, centered at 1 m/yr retreat. Taller cliffs amplify risk.
+
+### Study Site: San Diego County Beaches
+
+The project covers coastal cliffs in San Diego County, organized by beach with MOP (Monitoring Point) ID ranges:
+
+| Beach | MOP Range | Notes |
+|-------|-----------|-------|
+| Blacks | 520-567 | Black's Beach, steep cliffs |
+| Torrey | 567-581 | Torrey Pines State Beach |
+| Del Mar | 595-620 | Del Mar city beaches |
+| Solana | 637-666 | Solana Beach |
+| San Elijo | 683-708 | San Elijo State Beach |
+| Encinitas | 708-764 | Encinitas/Moonlight Beach |
+
+**IMPORTANT**: These MOP ranges are canonical and match the transect shapefile. Always use these ranges when:
+- Filtering survey data by beach
+- Subsetting transects for training/evaluation
+- Reporting results by location
+- Running extraction with `--beach` flag
+
+Survey CSV files use MOP1/MOP2 columns to indicate coverage range per survey.
 
 ### Data Processing Conventions
 - **Transect extraction**: Use `ShapefileTransectExtractor` with predefined transect lines from shapefile

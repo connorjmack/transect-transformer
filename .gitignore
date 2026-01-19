@@ -143,6 +143,7 @@ Desktop.ini
 # Data files
 data/mops/
 data/testing/
+data/survey_lists/
 *.kml
 *.kmz
 data/raw/

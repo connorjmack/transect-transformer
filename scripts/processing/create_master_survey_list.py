@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def main():
-    survey_lists_dir = Path("data/survey_lists")
+    survey_lists_dir = Path("data/raw")
 
     # Find all CSV files except master_list.csv
     csv_files = [f for f in survey_lists_dir.glob("*.csv") if f.name != "master_list.csv"]

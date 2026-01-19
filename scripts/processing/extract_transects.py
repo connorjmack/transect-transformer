@@ -39,13 +39,13 @@ Usage:
     # From survey CSV (auto-converts paths for current OS)
     python scripts/processing/extract_transects.py \\
         --transects data/mops/transects_10m/transect_lines.shp \\
-        --survey-csv data/survey_lists/master_list.csv \\
+        --survey-csv data/raw/master_list.csv \\
         --output data/processed/all_transects.npz
 
     # Force Linux paths (e.g., when CSV has Mac paths but running on Linux)
     python scripts/processing/extract_transects.py \\
         --transects data/mops/transects_10m/transect_lines.shp \\
-        --survey-csv data/survey_lists/master_list.csv \\
+        --survey-csv data/raw/master_list.csv \\
         --target-os linux \\
         --output data/processed/all_transects.npz
 """

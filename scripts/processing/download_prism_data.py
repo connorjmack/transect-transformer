@@ -15,7 +15,7 @@ Usage:
 
     # Download based on survey dates (auto-detect range from master_list.csv)
     python scripts/processing/download_prism_data.py \
-        --survey-csv data/survey_lists/master_list.csv \
+        --survey-csv data/raw/master_list.csv \
         --lookback-days 90 \
         --output data/raw/prism/
 
@@ -88,16 +88,6 @@ class PRISMDownloader:
 
     # Available variables
     VARIABLES = ['ppt', 'tmin', 'tmax', 'tmean', 'tdmean', 'vpdmin', 'vpdmax']
-
-    # PRISM grid parameters (CONUS)
-    GRID_PARAMS = {
-        'nrows': 621,
-        'ncols': 1405,
-        'xllcorner': -125.0208333,
-        'yllcorner': 24.0625000,
-        'cellsize': 0.0416667,  # ~4km
-        'nodata': -9999,
-    }
 
     def __init__(
         self,
@@ -268,67 +258,50 @@ class PRISMDownloader:
 
     def extract_grid_value(
         self,
-        bil_path: Path,
+        tif_path: Path,
         lat: float,
         lon: float,
     ) -> float:
-        """Extract value at a coordinate from PRISM BIL grid file.
+        """Extract value at a coordinate from PRISM GeoTIFF file.
 
         Args:
-            bil_path: Path to BIL file
+            tif_path: Path to GeoTIFF file
             lat: Latitude (decimal degrees)
             lon: Longitude (decimal degrees)
 
         Returns:
             Value at the specified coordinate, or NaN if no data
         """
-        # Calculate grid indices from coordinates
-        row, col = self._coord_to_index(lat, lon)
-
-        # Validate indices
-        if not (0 <= row < self.GRID_PARAMS['nrows'] and
-                0 <= col < self.GRID_PARAMS['ncols']):
-            logger.warning(
-                f"Coordinate ({lat}, {lon}) outside PRISM grid bounds"
+        try:
+            import rasterio
+            from rasterio.transform import rowcol
+        except ImportError:
+            raise ImportError(
+                "rasterio is required for reading GeoTIFF files. "
+                "Install with: pip install rasterio"
             )
-            return np.nan
 
-        # Read value from BIL file
-        # BIL format: Band Interleaved by Line, 32-bit float
-        with open(bil_path, 'rb') as f:
-            # Seek to the correct position
-            # BIL stores data row by row, 4 bytes per float32 value
-            offset = (row * self.GRID_PARAMS['ncols'] + col) * 4
-            f.seek(offset)
+        with rasterio.open(tif_path) as src:
+            # Convert lat/lon to row/col using the raster's transform
+            try:
+                row, col = rowcol(src.transform, lon, lat)
+            except Exception:
+                logger.warning(f"Coordinate ({lat}, {lon}) outside raster bounds")
+                return np.nan
 
-            # Read single float32 value
-            value = struct.unpack('f', f.read(4))[0]
+            # Validate indices
+            if not (0 <= row < src.height and 0 <= col < src.width):
+                logger.warning(f"Coordinate ({lat}, {lon}) outside raster bounds")
+                return np.nan
 
-        # Check for no-data value
-        if value == self.GRID_PARAMS['nodata'] or value < -999:
-            return np.nan
+            # Read the value
+            value = src.read(1)[row, col]
 
-        return value
+            # Check for nodata
+            if src.nodata is not None and value == src.nodata:
+                return np.nan
 
-    def _coord_to_index(self, lat: float, lon: float) -> Tuple[int, int]:
-        """Convert lat/lon to PRISM grid row/col indices.
-
-        Args:
-            lat: Latitude (decimal degrees)
-            lon: Longitude (decimal degrees)
-
-        Returns:
-            Tuple of (row, col) indices
-        """
-        params = self.GRID_PARAMS
-
-        # PRISM grid starts from lower-left corner
-        # Row 0 is at the top (north), so we need to invert
-        col = int((lon - params['xllcorner']) / params['cellsize'])
-        row = int((params['yllcorner'] + params['nrows'] * params['cellsize'] - lat)
-                  / params['cellsize'])
-
-        return row, col
+            return float(value)
 
     def extract_beach_values(
         self,

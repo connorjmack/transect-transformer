@@ -32,14 +32,14 @@ The project covers coastal cliffs in San Diego County, California. Transects are
 ```bash
 python scripts/processing/extract_transects.py \
     --transects data/mops/transects_10m/transect_lines.shp \
-    --survey-csv data/survey_lists/master_list.csv \
+    --survey-csv data/raw/master_list.csv \
     --beach delmar \
     --output data/processed/delmar.npz
 ```
 
 ### Data Organization
 
-Survey data is organized in `data/survey_lists/master_list.csv` with columns:
+Survey data is organized in `data/raw/master_list.csv` with columns:
 - `date`: Survey date (YYYYMMDD)
 - `MOP1`, `MOP2`: MOP range covered by survey
 - `full_path`: Path to LAS file

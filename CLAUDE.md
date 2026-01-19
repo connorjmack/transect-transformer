@@ -131,7 +131,7 @@ python scripts/processing/extract_transects.py \
 # Extract transects from survey CSV (recommended for large datasets)
 python scripts/processing/extract_transects.py \
     --transects data/mops/transects_10m/transect_lines.shp \
-    --survey-csv data/survey_lists/master_list.csv \
+    --survey-csv data/raw/master_list.csv \
     --beach delmar \
     --output data/processed/delmar.npz
 
@@ -155,7 +155,7 @@ python scripts/processing/subset_transects.py \
 # Force Linux paths when running on Linux with Mac-formatted CSV:
 python scripts/processing/extract_transects.py \
     --transects data/mops/transects_10m/transect_lines.shp \
-    --survey-csv data/survey_lists/master_list.csv \
+    --survey-csv data/raw/master_list.csv \
     --target-os linux \
     --output data/processed/all_transects.npz
 

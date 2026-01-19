@@ -65,6 +65,10 @@ def _load_wave_dataframe(
         'power': wave.power,
     }).dropna()
 
+    # Crop to recent years for clarity
+    cutoff = pd.Timestamp('2017-01-01')
+    df = df[df['time'] >= cutoff]
+
     # Downsample to daily means for cleaner visualization
     df = (
         df.set_index('time')
@@ -161,13 +165,8 @@ def render_forcing_timeseries():
     _render_availability(wave_df, atmos_df, dims)
 
     selected_epoch_idx, selected_epoch_ts, selected_label = _select_epoch(epoch_dates)
-    x_range = _get_time_range(wave_df, atmos_df)
 
-    st.markdown("---")
-    _render_wave_section(wave_df, epoch_dates, wave_meta, selected_epoch_ts, x_range)
-    _render_rain_section(atmos_df, epoch_dates, beach, selected_epoch_ts, x_range)
-
-    st.markdown("---")
+    # Cliff profiles near the slider
     _render_cliff_slider(
         data,
         transect_id,
@@ -176,6 +175,10 @@ def render_forcing_timeseries():
         selected_epoch_idx,
         selected_label,
     )
+
+    st.markdown("---")
+    _render_wave_section(wave_df, epoch_dates, wave_meta, selected_epoch_ts)
+    _render_rain_section(atmos_df, epoch_dates, beach, selected_epoch_ts)
 
 
 def _render_availability(
@@ -201,10 +204,43 @@ def _render_availability(
         st.metric("Cliff epochs", dims['n_epochs'])
 
 
+def _select_epoch(epoch_dates: List[str]) -> Tuple[int, Optional[pd.Timestamp], str]:
+    """Select epoch via slider and return index, timestamp, and label."""
+    if not epoch_dates:
+        return 0, None, "Epoch 0"
+
+    options = list(range(len(epoch_dates)))
+    labels = [
+        f"{idx}: {epoch_dates[idx][:10]}" if epoch_dates else f"Epoch {idx}"
+        for idx in options
+    ]
+    default_epoch = st.session_state.get('forcing_epoch_idx', options[-1])
+    if default_epoch not in options:
+        default_epoch = options[-1]
+
+    selected_epoch = st.select_slider(
+        "LiDAR epoch",
+        options=options,
+        value=default_epoch,
+        format_func=lambda idx: labels[idx],
+        key="forcing_epoch_slider",
+    )
+    st.session_state.forcing_epoch_idx = selected_epoch
+
+    ts = None
+    try:
+        ts = pd.to_datetime(epoch_dates[selected_epoch])
+    except Exception:
+        ts = None
+
+    return selected_epoch, ts, labels[selected_epoch]
+
+
 def _render_wave_section(
     df: Optional[pd.DataFrame],
     epoch_dates: List[str],
     meta: Optional[dict],
+    selected_date: Optional[pd.Timestamp],
 ):
     """Plot wave forcing timelines."""
     st.subheader("Wave parameters")
@@ -243,6 +279,7 @@ def _render_wave_section(
     )
 
     _add_epoch_lines(fig, epoch_dates)
+    _add_selected_line(fig, selected_date)
 
     fig.update_layout(
         height=800,
@@ -263,6 +300,7 @@ def _render_rain_section(
     df: Optional[pd.DataFrame],
     epoch_dates: List[str],
     beach: Optional[str],
+    selected_date: Optional[pd.Timestamp],
 ):
     """Plot precipitation-related timelines."""
     st.subheader("Rain parameters")
@@ -306,6 +344,7 @@ def _render_rain_section(
         )
 
     _add_epoch_lines(fig, epoch_dates)
+    _add_selected_line(fig, selected_date)
 
     fig.update_layout(
         height=700,
@@ -323,31 +362,24 @@ def _render_cliff_slider(
     transect_id: int,
     feature_names: List[str],
     epoch_dates: List[str],
+    selected_epoch: int,
+    selected_label: str,
 ):
     """Render cliff profile slider for elevation over time."""
     st.subheader("Cliff profiles over time")
 
-    if not epoch_dates:
-        st.info("No epoch dates available for cliff profiles.")
-        return
-
-    # Select epoch with a slider that shows dates
-    options = list(range(len(epoch_dates)))
-    labels = [
-        f"{idx}: {epoch_dates[idx][:10]}" if epoch_dates else f"Epoch {idx}"
-        for idx in options
-    ]
-    default_epoch = st.session_state.get('forcing_epoch_idx', options[-1])
-    if default_epoch not in options:
-        default_epoch = options[-1]
-    selected_epoch = st.select_slider(
-        "LiDAR epoch",
-        options=options,
-        value=default_epoch,
-        format_func=lambda idx: labels[idx],
-        key="forcing_epoch_slider",
-    )
-    st.session_state.forcing_epoch_idx = selected_epoch
+    # Compute fixed x-axis range across all epochs
+    x_range = None
+    try:
+        all_epochs_transect = get_transect_by_id(data, transect_id)
+        distances_all = all_epochs_transect['distances']
+        if isinstance(distances_all, np.ndarray):
+            valid = distances_all[~np.isnan(distances_all)]
+            if valid.size > 0:
+                x_min, x_max = float(valid.min()), float(valid.max())
+                x_range = (x_min, x_max)
+    except Exception:
+        x_range = None
 
     elevation_idx = _get_feature_index(feature_names, 'elevation_m')
     if elevation_idx is None:
@@ -377,11 +409,13 @@ def _render_cliff_slider(
     )
     fig.update_layout(
         height=450,
-        title=f"Elevation profile - {labels[selected_epoch]}",
+        title=f"Elevation profile - {selected_label}",
         xaxis_title="Distance from toe (m)",
         yaxis_title="Elevation (m)",
         showlegend=False,
     )
+    if x_range:
+        fig.update_xaxes(range=x_range)
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -422,6 +456,19 @@ def _add_epoch_lines(fig: go.Figure, epoch_dates: List[str]):
             line_color="#555",
             opacity=0.6,
         )
+
+
+def _add_selected_line(fig: go.Figure, selected_date: Optional[pd.Timestamp]):
+    """Add highlighted line for currently selected epoch."""
+    if selected_date is None:
+        return
+    fig.add_vline(
+        x=selected_date,
+        line_width=2,
+        line_dash="solid",
+        line_color="#e74c3c",
+        opacity=0.9,
+    )
 
 
 def _parse_epoch_timestamps(epoch_dates: List[str]) -> List[pd.Timestamp]:

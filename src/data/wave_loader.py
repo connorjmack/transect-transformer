@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from .cdip_wave_loader import CDIPWaveLoader, WaveData
+from .wave_features import WaveMetricsCalculator, WaveMetricsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class WaveLoader:
         cdip_dir: Directory containing CDIP NetCDF files
         lookback_days: Number of days to look back from scan date
         resample_hours: Resampling interval in hours
-        n_features: Number of wave features (4)
+        n_features: Number of wave features (4 basic, or 6 with derived features)
     """
 
     def __init__(
@@ -51,6 +52,8 @@ class WaveLoader:
         lookback_days: int = 90,
         resample_hours: int = 6,
         cache_size: int = 50,
+        compute_derived_features: bool = False,
+        cliff_orientations: Optional[Dict[int, float]] = None,
     ):
         """Initialize wave loader.
 
@@ -59,11 +62,15 @@ class WaveLoader:
             lookback_days: Days to look back from scan date (default: 90)
             resample_hours: Resample interval in hours (default: 6)
             cache_size: Number of WaveData objects to keep in memory
+            compute_derived_features: If True, compute shore-normal and runup (default: False)
+            cliff_orientations: Optional dict mapping MOP ID to cliff orientation (degrees)
         """
         self.cdip_dir = Path(cdip_dir)
         self.lookback_days = lookback_days
         self.resample_hours = resample_hours
-        self.n_features = 4  # hs, tp, dp, power
+        self.compute_derived_features = compute_derived_features
+        self.cliff_orientations = cliff_orientations or {}
+        self.n_features = 6 if compute_derived_features else 4  # hs, tp, dp, power [+ shore_normal, runup]
 
         # Validate directory exists
         if not self.cdip_dir.exists():
@@ -75,6 +82,16 @@ class WaveLoader:
 
         # Initialize CDIP loader for local files
         self._cdip_loader = CDIPWaveLoader(local_dir=self.cdip_dir)
+
+        # Initialize metrics calculator if derived features requested
+        if self.compute_derived_features:
+            metrics_config = WaveMetricsConfig(
+                lookback_days=lookback_days,
+                resample_hours=resample_hours,
+            )
+            self._metrics_calculator = WaveMetricsCalculator(metrics_config)
+        else:
+            self._metrics_calculator = None
 
         # Track available MOPs
         self._available_mops = self._scan_available_mops()
@@ -172,6 +189,48 @@ class WaveLoader:
 
         return wave_data
 
+    def _compute_derived_features(
+        self,
+        features: np.ndarray,
+        mop_id: int,
+    ) -> np.ndarray:
+        """Compute derived wave features (shore-normal and runup).
+
+        Args:
+            features: (T, 4) array of [hs, tp, dp, power]
+            mop_id: MOP transect ID for cliff orientation lookup
+
+        Returns:
+            (T, 6) array with shore-normal and runup appended
+        """
+        if self._metrics_calculator is None:
+            return features
+
+        # Extract hs, tp, dp
+        hs = features[:, 0]
+        tp = features[:, 1]
+        dp = features[:, 2]
+
+        # Get cliff orientation for this MOP (if available)
+        cliff_orientation = self.cliff_orientations.get(mop_id, None)
+
+        # Compute shore-normal component
+        if cliff_orientation is not None:
+            shore_normal = self._metrics_calculator.compute_shore_normal_component(
+                hs, dp, cliff_orientation
+            )
+        else:
+            # Use NaN if orientation not provided
+            shore_normal = np.full_like(hs, np.nan)
+
+        # Compute runup (Stockdon 2006)
+        runup = self._metrics_calculator.compute_runup_stockdon(hs, tp)
+
+        # Append derived features: [hs, tp, dp, power, shore_normal, runup]
+        derived_features = np.column_stack([features, shore_normal, runup]).astype(np.float32)
+
+        return derived_features
+
     def get_wave_for_scan(
         self,
         mop_id: int,
@@ -187,7 +246,9 @@ class WaveLoader:
 
         Returns:
             Tuple of:
-                features: (T_w, 4) array of [hs, tp, dp, power]
+                features: (T_w, 4) or (T_w, 6) array depending on compute_derived_features
+                    Basic: [hs, tp, dp, power]
+                    With derived: [hs, tp, dp, power, shore_normal, runup]
                 day_of_year: (T_w,) array for seasonality encoding
         """
         # Convert ordinal to datetime if needed
@@ -235,6 +296,10 @@ class WaveLoader:
             doy = dates.dayofyear.values.astype(np.int32)
 
             return features, doy
+
+        # Compute derived features if requested
+        if self.compute_derived_features:
+            features = self._compute_derived_features(features, mop_id)
 
         return features, doy
 

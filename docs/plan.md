@@ -1024,7 +1024,11 @@ transect-transformer/
 ├── scripts/
 │   ├── processing/                # Data pipeline scripts
 │   │   └── extract_transects.py   # Transect extraction CLI ✅
-│   ├── visualization/             # Plotting and figures
+│   ├── visualization/             # Plotting and figures ✅
+│   │   ├── README.md              # Visualization documentation ✅
+│   │   ├── quick_wave_summary.py  # Quick 4-panel wave overview ✅
+│   │   ├── wave_climate_figures.py # 8 comprehensive wave appendix figures ✅
+│   │   ├── plot_prism_coverage.py  # 3 comprehensive atmospheric figures ✅
 │   │   └── study_site_fig.py      # Generate study site figures ✅
 │   ├── setup/                     # Environment and admin scripts
 │   │   └── verify_setup.py        # Verify installation ✅
@@ -2178,7 +2182,7 @@ if hasattr(self, 'context_3d'):
 
 ---
 
-## Progress Summary (as of 2026-01-18)
+## Progress Summary (as of 2026-01-19)
 
 ### Completed Items
 ✅ **Project Structure**: All directories and base files created
@@ -2186,6 +2190,12 @@ if hasattr(self, 'context_3d'):
 ✅ **Transect Extraction**: Complete implementation with unit tests
 ✅ **Logging Utility**: Basic logging infrastructure
 ✅ **Architecture Design**: Spatio-temporal encoder design complete
+✅ **Wave Data Pipeline**: CDIP loader, download script, 193 MOPs downloaded (2017-2025)
+✅ **Atmospheric Data Pipeline**: PRISM loader, processing, 6 beaches (2017-2025, 25 features)
+✅ **Publication Figures**: 11 comprehensive appendix figures for wave climate and atmospheric data
+  - 8 wave climate figures (distributions, roses, extremes, seasonal, spatial)
+  - 3 atmospheric figures (overview, feature distributions, extreme events)
+  - Full documentation in `scripts/visualization/README.md`
 
 ### In Progress
 🔄 **Phase 1 (Data Pipeline)**: 3/7 subsections complete
@@ -2211,6 +2221,46 @@ if hasattr(self, 'context_3d'):
 ---
 
 ## Recent Updates
+
+### 2026-01-19: Publication-Quality Visualization Suite
+
+**Comprehensive visualization scripts**: Implemented 11 publication-quality appendix figures for manuscript submission.
+
+**Wave Climate Figures** (`wave_climate_figures.py`):
+- **A1**: Wave height distributions with Weibull fits (6 beaches)
+- **A2**: Wave period characteristics (Hs vs Tp hexbin with marginals)
+- **A3**: Wave direction roses (6 polar plots, weighted by height)
+- **A4**: Wave power statistics (box plots, CDFs, distributions, table)
+- **A5**: Seasonal patterns (monthly means, seasonal boxes, annual heatmap)
+- **A6**: Storm climatology (time series, duration, frequency, intensity)
+- **A7**: Spatial wave climate (latitudinal profiles, summary table)
+- **A8**: Extreme value analysis (GEV fit, return periods, design levels)
+- **Data**: 193 MOPs, 2017-2025 (9 years), ~221k hourly records per MOP
+
+**PRISM Atmospheric Figures** (`plot_prism_coverage.py`):
+- **prism_overview.png**: 3x3 grid with beach map, long-term trends, seasonal climatology, annual totals, spatio-temporal heatmap, coverage table
+- **prism_feature_distributions.png**: 5x3 grid with histograms for 15 derived features (cumulative precip, API, wet-dry cycles, VPD, freeze-thaw)
+- **prism_extreme_events.png**: 2x2 grid with extreme precipitation events (>25mm, >50mm), API time series, VPD time series
+- **Data**: 6 beaches, 2017-2025 (9 years, 3,287 days), 25 features per day
+
+**Quick Wave Summary** (`quick_wave_summary.py`):
+- 4-panel overview figure for quick data checks
+- Wave height distributions, Hs vs Tp scatter, box plots, power distributions
+
+**Features**:
+- All figures save to `figures/appendix/` by default
+- Selective figure generation via command-line arguments
+- Interactive display mode for exploration
+- Comprehensive documentation in `scripts/visualization/README.md`
+- Publication-ready: 150 DPI, proper sizing, clear labels
+
+**Benefits**:
+- Comprehensive characterization of environmental forcing data
+- Ready for manuscript Methods and Appendix sections
+- Supports data quality verification and exploratory analysis
+- Reveals key insights: seasonal patterns, extreme events, spatial variability
+
+---
 
 ### 2026-01-18: Spatio-Temporal Architecture Update
 

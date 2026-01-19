@@ -167,9 +167,11 @@ class WaveEncoder(EnvironmentalEncoder):
     Wrapper around EnvironmentalEncoder with wave-specific defaults.
     Wave data format:
         - T_w = 360 timesteps (90 days @ 6hr intervals)
-        - 4 features: [hs, tp, dp, power]
+        - 4 basic features: [hs, tp, dp, power]
+        - 6 features with derived: [hs, tp, dp, power, shore_normal, runup]
 
     Args:
+        n_features: Number of wave features (default 4, use 6 with derived features)
         d_model: Hidden dimension (default 256)
         n_heads: Number of attention heads (default 8)
         n_layers: Number of transformer layers (default 3)
@@ -178,13 +180,14 @@ class WaveEncoder(EnvironmentalEncoder):
 
     def __init__(
         self,
+        n_features: int = 4,
         d_model: int = 256,
         n_heads: int = 8,
         n_layers: int = 3,
         dropout: float = 0.1,
     ):
         super().__init__(
-            n_features=4,
+            n_features=n_features,
             d_model=d_model,
             n_heads=n_heads,
             n_layers=n_layers,

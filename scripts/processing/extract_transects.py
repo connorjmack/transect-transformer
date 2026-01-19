@@ -42,6 +42,13 @@ Usage:
         --survey-csv data/raw/master_list.csv \\
         --output data/processed/all_transects.npz
 
+    # From survey CSV with automatic LAZ substitution (if LAZ files exist)
+    python scripts/processing/extract_transects.py \\
+        --transects data/mops/transects_10m/transect_lines.shp \\
+        --survey-csv data/raw/master_list.csv \\
+        --prefer-laz \\
+        --output data/processed/all_transects.npz
+
     # Force Linux paths (e.g., when CSV has Mac paths but running on Linux)
     python scripts/processing/extract_transects.py \\
         --transects data/mops/transects_10m/transect_lines.shp \\
@@ -200,6 +207,41 @@ def substitute_copc_files(las_files: List[Path], verbose: bool = True) -> Tuple[
             substituted += 1
             if verbose:
                 logger.debug(f"Using COPC: {copc_path.name} instead of {las_path.name}")
+        else:
+            result.append(las_path)
+
+    return result, substituted
+
+
+def substitute_laz_files(las_files: List[Path], verbose: bool = True) -> Tuple[List[Path], int]:
+    """Substitute LAS files with LAZ versions where available.
+
+    Args:
+        las_files: List of LAS/LAZ file paths
+        verbose: If True, log substitutions
+
+    Returns:
+        Tuple of (updated file list, number of substitutions made)
+    """
+    result = []
+    substituted = 0
+
+    for las_path in las_files:
+        # Skip if already a LAZ file
+        if las_path.suffix.lower() == '.laz':
+            result.append(las_path)
+            continue
+
+        # Try substituting .las with .laz
+        if las_path.suffix.lower() == '.las':
+            laz_path = las_path.with_suffix('.laz')
+            if laz_path.exists():
+                result.append(laz_path)
+                substituted += 1
+                if verbose:
+                    logger.debug(f"Using LAZ: {laz_path.name} instead of {las_path.name}")
+            else:
+                result.append(las_path)
         else:
             result.append(las_path)
 
@@ -783,6 +825,12 @@ def main():
         help="Automatically use .copc.laz files when available (10-100x faster loading)",
     )
 
+    parser.add_argument(
+        "--prefer-laz",
+        action="store_true",
+        help="Automatically use .laz files instead of .las when available (faster loading, smaller files)",
+    )
+
     args = parser.parse_args()
 
     # Apply beach preset if specified
@@ -856,6 +904,14 @@ def main():
         original_count = len(las_files)
         las_files = las_files[:args.limit]
         logger.info(f"Limited to first {args.limit} of {original_count} LAS files (--limit)")
+
+    # Substitute LAZ files if --prefer-laz is set
+    if args.prefer_laz:
+        las_files, n_laz = substitute_laz_files(las_files, verbose=True)
+        if n_laz > 0:
+            logger.info(f"Substituted {n_laz} files with LAZ versions (faster loading, smaller files)")
+        else:
+            logger.info("No LAZ versions found - using original LAS files")
 
     # Substitute COPC files if --prefer-copc is set
     if args.prefer_copc:

@@ -44,6 +44,9 @@ transect-transformer/
 │   │   │   └── __init__.py
 │   │   ├── shapefile_transect_extractor.py  # Core transect extraction
 │   │   ├── transect_voxelizer.py  # Alternative voxel-based extraction (unused)
+│   │   ├── cdip_wave_loader.py    # CDIP THREDDS/OPeNDAP wave data access ✅
+│   │   ├── wave_loader.py         # Wave data integration for training ✅
+│   │   ├── atmos_loader.py        # Atmospheric data integration ✅
 │   │   ├── spatial_filter.py      # Spatial filtering utilities
 │   │   ├── README.md              # Data module documentation
 │   │   └── __init__.py
@@ -52,19 +55,27 @@ transect-transformer/
 │   └── utils/                     # Shared utilities
 ├── scripts/
 │   ├── processing/                # Data pipeline scripts
-│   │   └── extract_transects.py   # Transect extraction CLI
-│   ├── visualization/             # Visualization and plotting
+│   │   ├── extract_transects.py   # Transect extraction CLI
+│   │   └── download_cdip_data.py  # Batch download CDIP wave data ✅
+│   ├── visualization/             # Visualization and plotting ✅
+│   │   ├── README.md              # Visualization documentation ✅
+│   │   ├── quick_wave_summary.py  # Quick 4-panel wave overview ✅
+│   │   ├── wave_climate_figures.py # 8 comprehensive wave appendix figures ✅
+│   │   ├── plot_prism_coverage.py  # 3 comprehensive atmospheric figures ✅
 │   │   └── study_site_fig.py      # Generate study site figures
 │   ├── setup/                     # Environment and admin scripts
 │   │   └── verify_setup.py        # Verify installation
 │   └── debug_orientation.py       # Debug script for orientation issues
 ├── configs/                       # Model and training configurations
-├── tests/                         # Test suite (65 tests)
+├── tests/                         # Test suite (83+ tests)
 │   ├── test_data/                 # Data module tests
-│   │   └── test_transect_extractor.py  # Extractor + cube format tests
+│   │   ├── test_transect_extractor.py  # Extractor + cube format tests (30 tests)
+│   │   ├── test_wave_loader.py         # Wave loader tests (18 tests) ✅
+│   │   ├── test_atmos_loader.py        # Atmospheric loader tests (27 tests)
+│   │   └── test_prism_download.py      # PRISM download tests
 │   ├── test_apps/                 # Application tests
-│   │   └── test_transect_viewer.py     # Viewer data_loader + validators
-│   └── test_utils.py              # Config utility tests
+│   │   └── test_transect_viewer.py     # Viewer data_loader + validators (27 tests)
+│   └── test_utils.py              # Config utility tests (8 tests)
 ├── README.md                      # Project README
 └── CLAUDE.md                      # This file - AI assistant instructions
 ```
@@ -223,6 +234,40 @@ The transect viewer supports (cube format NPZ files):
 - **Transect Evolution**: Overlaid profiles, change detection, temporal heatmap across all epochs
 - **Cross-Transect View**: Spatial analysis and multi-transect comparison at selected epoch
 
+### Visualization Scripts (Publication Figures)
+```bash
+# Generate wave climate appendix figures (8 comprehensive figures)
+python scripts/visualization/wave_climate_figures.py --cdip-dir data/raw/cdip/ --output figures/appendix/
+
+# Quick wave summary (4-panel overview)
+python scripts/visualization/quick_wave_summary.py --cdip-dir data/raw/cdip/ --output figures/appendix/
+
+# Generate PRISM atmospheric data figures (3 comprehensive figures)
+python scripts/visualization/plot_prism_coverage.py --atmos-dir data/processed/atmospheric/ --output-dir figures/appendix/
+
+# Generate specific figure types
+python scripts/visualization/wave_climate_figures.py --figures A1 A3 A5  # Specific wave figures
+python scripts/visualization/plot_prism_coverage.py --figure-type overview  # Only overview
+```
+
+**Wave Climate Figures** (2017-2025, 193 MOPs):
+- **Figure A1**: Wave height distributions with Weibull fits (6 beaches)
+- **Figure A2**: Wave period characteristics (Hs vs Tp hexbin with marginals)
+- **Figure A3**: Wave direction roses (6 polar plots, weighted by height)
+- **Figure A4**: Wave power statistics (box plots, CDFs, distributions, table)
+- **Figure A5**: Seasonal patterns (monthly means, seasonal boxes, annual heatmap)
+- **Figure A6**: Storm climatology (time series, duration, frequency, intensity)
+- **Figure A7**: Spatial wave climate (latitudinal profiles, summary table)
+- **Figure A8**: Extreme value analysis (GEV fit, return periods, design levels)
+
+**PRISM Atmospheric Figures** (2017-2025, 6 beaches):
+- **prism_overview.png**: 3x3 grid with beach map, long-term trends (monthly), seasonal climatology, annual totals, spatio-temporal heatmap, coverage table
+- **prism_feature_distributions.png**: 5x3 grid with histograms for 15 derived features (cumulative precip, API, wet-dry cycles, VPD, freeze-thaw)
+- **prism_extreme_events.png**: 2x2 grid with extreme precipitation events (>25mm, >50mm), API time series, VPD time series
+
+**Output Location**: All figures save to `figures/appendix/` by default
+**Requirements**: See `scripts/visualization/README.md` for detailed documentation
+
 ## Architecture Overview
 
 ### Model Components (IMPLEMENTED & TESTED)
@@ -257,11 +302,18 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
    - Uses learned temporal position embeddings
    - Includes day-of-year seasonality embedding (handles leap years with 367 days)
    - Padding mask support for variable-length sequences
-   - **WaveEncoder**: processes T_w timesteps (~360 for 90 days @ 6hr intervals), 4 features [hs, tp, dp, power]
+   - **WaveEncoder**: processes T_w timesteps (~360 for 90 days @ 6hr intervals), 4 or 6 features
+     - Basic (n_features=4, default): [hs, tp, dp, power]
+     - With derived (n_features=6): [hs, tp, dp, power, shore_normal, runup]
    - **AtmosphericEncoder**: processes T_a timesteps (~90 for 90 days @ daily intervals), 24 features
    - **Usage**:
      ```python
-     wave_encoder = WaveEncoder(d_model=256, n_heads=8)
+     # Basic wave encoder (4 features)
+     wave_encoder = WaveEncoder(n_features=4, d_model=256, n_heads=8)
+
+     # With derived features (6 features)
+     wave_encoder = WaveEncoder(n_features=6, d_model=256, n_heads=8)
+
      atmos_encoder = AtmosphericEncoder(d_model=256, n_heads=8)
 
      wave_outputs = wave_encoder(wave_features, day_of_year, padding_mask=None)
@@ -367,17 +419,100 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
 ### Data Components
 
 1. **ShapefileTransectExtractor** (`src/data/shapefile_transect_extractor.py`): Transect extraction from LiDAR
+   - **Status**: ✅ Implemented, 30 tests passing
    - Uses predefined transect lines from a shapefile (e.g., MOPS transects)
    - Extracts points within buffer distance, projects onto transect line
    - Resamples to N=128 points with 12 features per point
    - **Point features (12)**: distance_m, elevation_m, slope_deg, curvature, roughness, intensity, red, green, blue, classification, return_number, num_returns
    - **Metadata (12)**: cliff_height_m, mean_slope_deg, max_slope_deg, toe_elevation_m, top_elevation_m, orientation_deg, transect_length_m, latitude, longitude, transect_id, mean_intensity, dominant_class
 
-2. **Parsers** (`src/data/parsers/`): I/O logic for geospatial formats
+2. **CDIPWaveLoader** (`src/data/cdip_wave_loader.py`): CDIP wave data access
+   - **Status**: ✅ Implemented and tested
+   - Fetches nearshore wave predictions from CDIP MOP system via THREDDS/OPeNDAP
+   - Supports local NetCDF files (recommended) or remote THREDDS access
+   - Data at 100m alongshore spacing, 10m water depth, hourly from 2000-present
+   - **Features**: hs (wave height), tp (peak period), dp (direction), ta (average period), power (computed)
+   - `to_tensor()` method converts to CliffCast format: (T_w, 4) with 6-hour resampling
+   - Handles circular mean for direction, fill values, and temporal alignment
+   - **Usage**: See "Wave Data (CDIP MOP System)" section below
+
+3. **WaveLoader** (`src/data/wave_loader.py`): Wave data integration for training
+   - **Status**: ✅ Implemented, 18 tests passing
+   - Manages loading CDIP data aligned to LiDAR scan dates
+   - LRU caching of WaveData objects (default: 50 MOPs)
+   - Graceful degradation: returns zeros if data unavailable (with warning)
+   - Mirrors `AtmosphericLoader` API for consistency
+   - Methods: `get_wave_for_scan()`, `get_batch_wave()`, `validate_coverage()`
+   - **Optional derived features**: Set `compute_derived_features=True` to compute shore-normal and runup (6 features total)
+   - **WaveDataset** helper class for PyTorch integration
+   - **Usage**:
+     ```python
+     # Basic 4 features (default)
+     loader = WaveLoader('data/raw/cdip/', lookback_days=90)
+     features, doy = loader.get_wave_for_scan(mop_id=582, scan_date='2023-12-15')
+     # features.shape: (360, 4) - [hs, tp, dp, power]
+
+     # With derived features (requires cliff orientations)
+     orientations = {582: 270, 583: 265}  # MOP ID -> degrees from N
+     loader = WaveLoader(
+         'data/raw/cdip/',
+         compute_derived_features=True,
+         cliff_orientations=orientations
+     )
+     features, doy = loader.get_wave_for_scan(mop_id=582, scan_date='2023-12-15')
+     # features.shape: (360, 6) - [hs, tp, dp, power, shore_normal, runup]
+     ```
+
+4. **WaveMetricsCalculator** (`src/data/wave_features.py`): Derived wave feature engineering
+   - **Status**: ✅ Implemented, 25+ tests passing
+   - Computes 19 physically-motivated features from raw CDIP wave data
+   - **Features computed**:
+     - **Raw (4)**: hs, tp, dp, power
+     - **Physical (2)**: shore_normal_hs (directional impact), runup_2pct (Stockdon 2006)
+     - **Integrated (3)**: cumulative_energy_mj, cumulative_power_kwh, mean_power_kw
+     - **Extreme (3)**: max_hs, hs_p90, hs_p99
+     - **Storm (5)**: storm_hours, storm_count, max_storm_duration_hr, time_since_storm_hr, mean_storm_duration_hr
+     - **Temporal (2)**: rolling_max_7d, hs_trend_slope
+   - Can output summary metrics (for analysis) or time series features (for model input)
+   - Integrated with WaveLoader via `compute_derived_features` flag
+   - **Usage**:
+     ```python
+     from src.data.wave_features import WaveMetricsCalculator, WaveMetricsConfig
+
+     # Compute time series features (for model input)
+     config = WaveMetricsConfig(lookback_days=90, resample_hours=6)
+     calculator = WaveMetricsCalculator(config)
+     features, doy = calculator.compute_timeseries_features(
+         df,  # pandas DataFrame with hs, tp, dp columns
+         cliff_orientation_deg=270,
+         beach_slope=0.1
+     )
+     # Returns: (T, 6) array [hs, tp, dp, power, shore_normal, runup]
+
+     # Compute summary metrics (for analysis/visualization)
+     metrics = calculator.compute_all_metrics(df, cliff_orientation_deg=270)
+     # Returns: dict with all 19 metrics
+
+     # CLI for batch processing
+     python src/data/wave_features.py \
+         --input data/raw/cdip/D0582_hindcast.nc \
+         --scan-date 2023-12-15 \
+         --lookback-days 90 \
+         --cliff-orientation 270
+     ```
+
+5. **AtmosphericLoader** (`src/data/atmos_loader.py`): Atmospheric data integration
+   - **Status**: ✅ Implemented, 27 tests passing
+   - Loads pre-computed atmospheric features from per-beach parquet files
+   - 90-day lookback window at daily intervals (T_a=90)
+   - 24 features: precip, temperature, API, wet/dry cycles, freeze-thaw, VPD
+   - **AtmosphericDataset** helper class for PyTorch integration
+
+6. **Parsers** (`src/data/parsers/`): I/O logic for geospatial formats
    - `kml_parser.py`: Parse KML/KMZ files for transect lines or regions
    - `shapefile_parser.py`: Parse ESRI shapefiles
 
-3. **TransectVoxelizer** (`src/data/transect_voxelizer.py`): Alternative voxel-based extraction (unused)
+7. **TransectVoxelizer** (`src/data/transect_voxelizer.py`): Alternative voxel-based extraction (unused)
    - Bins points along transect into 1D segments
    - More robust to variable point density but currently not used
 
@@ -388,8 +523,9 @@ Inputs (Cube Format):
   - Transect: (B, T, N, 12) point features + (B, T, 12) metadata + (B, T, N) distances
     where T = number of LiDAR epochs (e.g., 10 for 2017-2025 annual scans)
   - Timestamps: (B, T) scan dates for temporal encoding
-  - Wave: (B, T_w, 4) features + (B, T_w) day-of-year (aligned to most recent scan)
-    Features: [hs, tp, dp, power]
+  - Wave: (B, T_w, n_wave) features + (B, T_w) day-of-year (aligned to most recent scan)
+    Basic (n_wave=4): [hs, tp, dp, power]
+    With derived (n_wave=6): [hs, tp, dp, power, shore_normal, runup]
   - Atmospheric: (B, T_a, 24) features + (B, T_a) day-of-year (aligned to most recent scan)
     Features: precip_mm, temp, cumulative precip, API, intensity, wet/dry cycles, VPD, freeze-thaw
 
@@ -591,11 +727,11 @@ print(f"Coverage: {coverage['coverage_pct']:.1f}%")
 ```
 data/
 ├── raw/
-│   ├── cdip/                  # Wave data (NetCDF files)
-│   │   ├── D0520_hindcast.nc  # Black's Beach
+│   ├── cdip/                  # Wave data (NetCDF files) ✅ 183 MOPs downloaded
+│   │   ├── D0520_hindcast.nc  # Black's Beach (~141MB each)
 │   │   ├── D0582_hindcast.nc  # Torrey Pines
 │   │   ├── D0595_hindcast.nc  # Del Mar
-│   │   └── ...
+│   │   └── ...                # 183 of 245 San Diego MOPs (74.7% coverage)
 │   ├── prism/                 # Raw PRISM climate data
 │   └── master_list.csv        # LiDAR survey metadata
 ├── processed/
@@ -603,6 +739,14 @@ data/
 │   ├── delmar.npz            # Transect cubes
 │   └── ...
 ```
+
+**Current Integration Status** (as of 2026-01-19):
+- ✅ **CDIPWaveLoader**: Fully implemented and tested
+- ✅ **WaveLoader**: Fully implemented with 18 unit tests passing
+- ✅ **Download Script**: Successfully downloaded 183/245 San Diego MOPs (~26GB)
+- ✅ **Configuration**: Wave data settings added to configs/default.yaml
+- ✅ **Documentation**: Complete usage examples and API documentation
+- 🔄 **Next Step**: Integrate WaveLoader into PyTorch Dataset class for training
 
 ### Attention Interpretation
 Multiple attention mechanisms reveal different physical attributions:

@@ -146,7 +146,8 @@ data/testing/
 data/survey_lists/
 *.kml
 *.kmz
-data/raw/
+data/raw/*
+!data/raw/master_list.csv
 data/processed/
 data/interim/
 data/external/

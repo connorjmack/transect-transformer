@@ -546,6 +546,120 @@ class TestCubeFormat:
         np.testing.assert_array_equal(loaded['transect_ids'], cube['transect_ids'])
 
 
+class TestSubsetTransects:
+    """Test transect subsetting by MOP range."""
+
+    def test_parse_mop_number_string(self):
+        """Test parsing MOP number from string formats."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.subset_transects import parse_mop_number
+
+        assert parse_mop_number("MOP 595") == 595
+        assert parse_mop_number("MOP 600_01") == 600
+        assert parse_mop_number("MOP600") == 600
+        assert parse_mop_number("595") == 595
+
+    def test_parse_mop_number_numeric(self):
+        """Test parsing MOP number from numeric types."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.subset_transects import parse_mop_number
+
+        assert parse_mop_number(595) == 595
+        assert parse_mop_number(595.0) == 595
+
+    def test_subset_cube(self, extractor, tmp_path):
+        """Test subsetting cube by MOP range."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.subset_transects import subset_cube
+
+        # Create synthetic cube with known MOP IDs
+        n_transects = 10
+        n_epochs = 2
+        n_points = 128
+        n_features = 12
+
+        cube = {
+            'points': np.random.randn(n_transects, n_epochs, n_points, n_features).astype(np.float32),
+            'distances': np.random.randn(n_transects, n_epochs, n_points).astype(np.float32),
+            'metadata': np.random.randn(n_transects, n_epochs, 12).astype(np.float32),
+            'transect_ids': np.array([f'MOP {590 + i}' for i in range(n_transects)], dtype=object),
+            'epoch_names': np.array(['2018.las', '2019.las'], dtype=object),
+            'feature_names': extractor.FEATURE_NAMES,
+        }
+
+        # Subset to MOP 595-597 (should get 3 transects: MOP 595, 596, 597)
+        subset = subset_cube(cube, mop_min=595, mop_max=597)
+
+        assert subset is not None
+        assert len(subset['transect_ids']) == 3
+        assert subset['points'].shape[0] == 3
+        assert 'MOP 595' in subset['transect_ids']
+        assert 'MOP 597' in subset['transect_ids']
+        assert 'MOP 590' not in subset['transect_ids']
+
+
+class TestPathConversion:
+    """Test cross-platform path conversion."""
+
+    def test_mac_to_linux_conversion(self):
+        """Test converting Mac paths to Linux."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_path_for_os
+
+        mac_path = "/Volumes/group/lidar/2018/scan.las"
+        linux_path = convert_path_for_os(mac_path, target_os='linux')
+
+        assert linux_path == "/projects/group/lidar/2018/scan.las"
+
+    def test_linux_to_mac_conversion(self):
+        """Test converting Linux paths to Mac."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_path_for_os
+
+        linux_path = "/projects/group/lidar/2018/scan.las"
+        mac_path = convert_path_for_os(linux_path, target_os='mac')
+
+        assert mac_path == "/Volumes/group/lidar/2018/scan.las"
+
+    def test_same_os_no_conversion(self):
+        """Test that paths are unchanged when already correct OS."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_path_for_os
+
+        mac_path = "/Volumes/group/lidar/scan.las"
+        result = convert_path_for_os(mac_path, target_os='mac')
+        assert result == mac_path
+
+        linux_path = "/projects/group/lidar/scan.las"
+        result = convert_path_for_os(linux_path, target_os='linux')
+        assert result == linux_path
+
+    def test_unknown_path_unchanged(self):
+        """Test that unknown path formats are unchanged."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_path_for_os
+
+        local_path = "/home/user/data/scan.las"
+        result = convert_path_for_os(local_path, target_os='linux')
+        assert result == local_path
+
+    def test_get_current_os(self):
+        """Test OS detection returns valid value."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import get_current_os
+
+        os_name = get_current_os()
+        assert os_name in ['mac', 'linux', 'windows']
+
+
 class TestDateParsing:
     """Test date parsing from LAS filenames."""
 

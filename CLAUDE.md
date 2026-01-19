@@ -46,7 +46,7 @@ transect-transformer/
 │   │   └── verify_setup.py        # Verify installation
 │   └── debug_orientation.py       # Debug script for orientation issues
 ├── configs/                       # Model and training configurations
-├── tests/                         # Test suite (57 tests)
+├── tests/                         # Test suite (65 tests)
 │   ├── test_data/                 # Data module tests
 │   │   └── test_transect_extractor.py  # Extractor + cube format tests
 │   ├── test_apps/                 # Application tests
@@ -137,6 +137,27 @@ python scripts/processing/extract_transects.py \
 
 # Available --beach options: blacks, torrey, delmar, solana, sanelijo, encinitas
 # Or use --mop-min and --mop-max for custom ranges
+
+# Subset existing cube by MOP range (recommended workflow)
+# 1. Extract all transects at once
+# 2. Subset into beach-specific files
+python scripts/processing/subset_transects.py \
+    --input data/processed/all_transects.npz \
+    --output data/processed/delmar.npz \
+    --beach delmar
+
+# List transects in a cube file
+python scripts/processing/subset_transects.py \
+    --input data/processed/all_transects.npz \
+    --list
+
+# Cross-platform: paths auto-convert between Mac (/Volumes/group/...) and Linux (/projects/group/...)
+# Force Linux paths when running on Linux with Mac-formatted CSV:
+python scripts/processing/extract_transects.py \
+    --transects data/mops/transects_10m/transect_lines.shp \
+    --survey-csv data/survey_lists/master_list.csv \
+    --target-os linux \
+    --output data/processed/all_transects.npz
 
 # Download wave data
 python scripts/download_wave_data.py --buoy_id 100 --start_date 2023-01-01 --end_date 2024-01-01
@@ -348,10 +369,10 @@ Multiple attention mechanisms reveal different physical attributions:
 
 ## Testing Strategy
 
-### Current Test Suite (57 tests)
+### Current Test Suite (65 tests)
 Run all tests: `pytest tests/ -v`
 
-**test_data/test_transect_extractor.py** (22 tests):
+**test_data/test_transect_extractor.py** (30 tests):
 - `TestShapefileTransectExtractorInit`: Initialization, feature/metadata names
 - `TestTransectDirection`: Direction vector computation from LineString
 - `TestTransectExtraction`: Point extraction and resampling
@@ -360,6 +381,8 @@ Run all tests: `pytest tests/ -v`
 - `TestEdgeCases`: Insufficient points, edge case handling
 - `TestFullPipeline`: End-to-end extraction with mocked LAS
 - `TestCubeFormat`: Flat-to-cube conversion, temporal ordering, save/load
+- `TestSubsetTransects`: MOP number parsing, cube subsetting by range
+- `TestPathConversion`: Cross-platform path conversion (Mac/Linux)
 - `TestDateParsing`: LAS filename date extraction
 
 **test_apps/test_transect_viewer.py** (27 tests):

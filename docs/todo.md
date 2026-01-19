@@ -17,11 +17,22 @@
 - [x] Cross-Transect View with spatial analysis
 - [x] String transect ID support (MOP names like "MOP 595")
 
-### Test Suite (57 tests passing)
-- [x] test_transect_extractor.py - 22 tests for extraction + cube format
+### Test Suite (65 tests passing)
+- [x] test_transect_extractor.py - 30 tests for extraction + cube format + subsetting + paths
 - [x] test_transect_viewer.py - 27 tests for data_loader + validators
 - [x] test_utils.py - 8 tests for config utilities
 - [x] Fixed config override handling (dot-notation)
+
+### Subset Utility
+- [x] `scripts/processing/subset_transects.py` for filtering NPZ by MOP range
+- [x] Parse MOP numbers from string IDs (e.g., "MOP 595")
+- [x] --beach argument for preset ranges
+- [x] --list flag to inspect cube contents
+
+### Cross-Platform Support
+- [x] Auto-detect OS (Mac vs Linux)
+- [x] Convert paths in survey CSV: `/Volumes/group/...` <-> `/projects/group/...`
+- [x] --target-os flag to override auto-detection
 
 ## In Progress
 

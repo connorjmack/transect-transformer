@@ -17,11 +17,17 @@ Current per-point features (12):
   distance_m, elevation_m, slope_deg, curvature, roughness,
   intensity, red, green, blue, classification, return_number, num_returns
 
+Cross-Platform Support:
+  Automatically converts paths between Mac (/Volumes/group/...) and Linux
+  (/projects/group/...) formats. The script detects the current OS and converts
+  paths from survey CSVs accordingly. Use --target-os to override auto-detection.
+
 TODO: Future enhancement - add per-point normal vectors (nx, ny, nz) computed from
       the local point neighborhood. This will enable better characterization of
       cliff face orientation and overhang detection.
 
 Usage:
+    # Basic extraction from LAS directory
     python scripts/processing/extract_transects.py \\
         --transects data/mops/transects_10m/transect_lines.shp \\
         --las-dir data/testing/ \\
@@ -29,9 +35,23 @@ Usage:
         --buffer 1.0 \\
         --n-points 128 \\
         --visualize
+
+    # From survey CSV (auto-converts paths for current OS)
+    python scripts/processing/extract_transects.py \\
+        --transects data/mops/transects_10m/transect_lines.shp \\
+        --survey-csv data/survey_lists/master_list.csv \\
+        --output data/processed/all_transects.npz
+
+    # Force Linux paths (e.g., when CSV has Mac paths but running on Linux)
+    python scripts/processing/extract_transects.py \\
+        --transects data/mops/transects_10m/transect_lines.shp \\
+        --survey-csv data/survey_lists/master_list.csv \\
+        --target-os linux \\
+        --output data/processed/all_transects.npz
 """
 
 import argparse
+import platform
 import re
 import sys
 from datetime import datetime
@@ -59,6 +79,84 @@ BEACH_MOP_RANGES = {
     'sanelijo': (683, 708),
     'encinitas': (708, 764),
 }
+
+# Cross-platform path mapping
+# Maps path prefixes between Mac and Linux
+PATH_MAPPINGS = {
+    'mac_to_linux': {
+        '/Volumes/group': '/projects/group',
+        '/Volumes/': '/projects/',
+    },
+    'linux_to_mac': {
+        '/projects/group': '/Volumes/group',
+        '/projects/': '/Volumes/',
+    },
+}
+
+
+def get_current_os() -> str:
+    """Detect current operating system.
+
+    Returns:
+        'mac', 'linux', or 'windows'
+    """
+    system = platform.system().lower()
+    if system == 'darwin':
+        return 'mac'
+    elif system == 'linux':
+        return 'linux'
+    elif system == 'windows':
+        return 'windows'
+    return system
+
+
+def convert_path_for_os(path: str, target_os: Optional[str] = None) -> str:
+    """Convert path between Mac and Linux formats.
+
+    Automatically detects current OS and converts paths accordingly.
+    Paths stored as Mac format (/Volumes/group/...) are converted to
+    Linux format (/projects/group/...) when running on Linux, and vice versa.
+
+    Args:
+        path: Original path string
+        target_os: Target OS ('mac' or 'linux'). If None, auto-detects.
+
+    Returns:
+        Converted path string
+    """
+    if target_os is None:
+        target_os = get_current_os()
+
+    path_str = str(path)
+
+    # Determine source OS from path
+    if path_str.startswith('/Volumes/'):
+        source_os = 'mac'
+    elif path_str.startswith('/projects/'):
+        source_os = 'linux'
+    else:
+        # Unknown format, return as-is
+        return path_str
+
+    # No conversion needed if same OS
+    if source_os == target_os:
+        return path_str
+
+    # Get mapping direction
+    if source_os == 'mac' and target_os == 'linux':
+        mappings = PATH_MAPPINGS['mac_to_linux']
+    elif source_os == 'linux' and target_os == 'mac':
+        mappings = PATH_MAPPINGS['linux_to_mac']
+    else:
+        return path_str
+
+    # Apply mappings (longer prefixes first for specificity)
+    for old_prefix, new_prefix in sorted(mappings.items(), key=lambda x: -len(x[0])):
+        if path_str.startswith(old_prefix):
+            converted = new_prefix + path_str[len(old_prefix):]
+            return converted
+
+    return path_str
 
 
 def parse_date_from_filename(filename: str) -> Optional[datetime]:
@@ -539,6 +637,14 @@ def main():
         help=f"Beach name to auto-set MOP range. Options: {', '.join(BEACH_MOP_RANGES.keys())}",
     )
 
+    parser.add_argument(
+        "--target-os",
+        type=str,
+        default=None,
+        choices=['mac', 'linux'],
+        help="Override OS detection for path conversion (default: auto-detect)",
+    )
+
     args = parser.parse_args()
 
     # Apply beach preset if specified
@@ -586,10 +692,22 @@ def main():
             survey_df = survey_df[survey_df['MOP1'] <= args.mop_max]
             logger.info(f"Filtered MOP1 <= {args.mop_max}: {original_count} -> {len(survey_df)} rows")
 
-        # Extract paths
-        csv_paths = [Path(p) for p in survey_df[args.path_col].tolist()]
+        # Extract paths and convert for current OS
+        target_os = args.target_os if args.target_os else get_current_os()
+        raw_paths = survey_df[args.path_col].tolist()
+        csv_paths = []
+        converted_count = 0
+
+        for p in raw_paths:
+            converted = convert_path_for_os(p, target_os=target_os)
+            if converted != p:
+                converted_count += 1
+            csv_paths.append(Path(converted))
+
         las_files.extend(csv_paths)
-        logger.info(f"Added {len(csv_paths)} LAS files from CSV")
+        logger.info(f"Added {len(csv_paths)} LAS files from CSV (target OS: {target_os})")
+        if converted_count > 0:
+            logger.info(f"  Converted {converted_count} paths for {target_os}")
 
     if not las_files:
         logger.error("No LAS files specified. Use --las-dir, --las-files, or --survey-csv")

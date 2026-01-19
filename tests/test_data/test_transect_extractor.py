@@ -436,5 +436,161 @@ class TestFullPipeline:
         assert not np.any(np.isnan(transects['metadata']))
 
 
+class TestCubeFormat:
+    """Test cube format conversion and handling."""
+
+    @pytest.fixture
+    def flat_transects(self, extractor):
+        """Create synthetic flat transects for testing cube conversion."""
+        np.random.seed(42)
+
+        # Simulate 3 transects x 2 epochs
+        n_transects_unique = 3
+        n_epochs = 2
+        n_points = 128
+        n_features = 12
+        n_meta = 12
+
+        # Create flat arrays (transect-epoch pairs)
+        n_total = n_transects_unique * n_epochs
+        points = np.random.randn(n_total, n_points, n_features).astype(np.float32)
+        distances = np.tile(np.linspace(0, 50, n_points), (n_total, 1)).astype(np.float32)
+        metadata = np.random.randn(n_total, n_meta).astype(np.float32)
+
+        # Transect IDs repeat for each epoch
+        transect_ids = np.array(['MOP 100', 'MOP 101', 'MOP 102'] * n_epochs, dtype=object)
+
+        # LAS sources alternate (2 files, each seen 3 times)
+        las_sources = ['20180101_scan.las', '20180101_scan.las', '20180101_scan.las',
+                       '20190101_scan.las', '20190101_scan.las', '20190101_scan.las']
+
+        return {
+            'points': points,
+            'distances': distances,
+            'metadata': metadata,
+            'transect_ids': transect_ids,
+            'las_sources': las_sources,
+            'feature_names': extractor.FEATURE_NAMES,
+            'metadata_names': extractor.METADATA_NAMES,
+        }
+
+    def test_convert_flat_to_cube(self, flat_transects):
+        """Test conversion from flat to cube format."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_flat_to_cube
+
+        cube = convert_flat_to_cube(flat_transects, n_points=128)
+
+        # Check cube structure
+        assert 'points' in cube
+        assert 'distances' in cube
+        assert 'metadata' in cube
+        assert 'timestamps' in cube
+        assert 'transect_ids' in cube
+        assert 'epoch_names' in cube
+        assert 'epoch_dates' in cube
+
+        # Check shapes - should be (n_transects, n_epochs, n_points, n_features)
+        assert cube['points'].shape == (3, 2, 128, 12)
+        assert cube['distances'].shape == (3, 2, 128)
+        assert cube['metadata'].shape == (3, 2, 12)
+        assert cube['timestamps'].shape == (3, 2)
+        assert len(cube['transect_ids']) == 3
+        assert len(cube['epoch_names']) == 2
+        assert len(cube['epoch_dates']) == 2
+
+    def test_cube_temporal_ordering(self, flat_transects):
+        """Test that epochs are sorted chronologically in cube format."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_flat_to_cube
+
+        cube = convert_flat_to_cube(flat_transects, n_points=128)
+
+        # Epochs should be sorted by date
+        epoch_dates = cube['epoch_dates']
+        assert epoch_dates[0] < epoch_dates[1], "Epochs should be chronologically sorted"
+
+    def test_cube_no_duplicate_transects(self, flat_transects):
+        """Test that cube has unique transects (no duplicates)."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_flat_to_cube
+
+        cube = convert_flat_to_cube(flat_transects, n_points=128)
+
+        transect_ids = cube['transect_ids']
+        assert len(transect_ids) == len(np.unique(transect_ids)), "Transect IDs should be unique"
+
+    def test_cube_save_load_roundtrip(self, flat_transects, tmp_path):
+        """Test saving and loading cube format data."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import convert_flat_to_cube, save_cube
+
+        cube = convert_flat_to_cube(flat_transects, n_points=128)
+
+        # Save cube
+        output_path = tmp_path / "test_cube.npz"
+        save_cube(cube, output_path)
+
+        assert output_path.exists()
+
+        # Load and verify
+        loaded = np.load(output_path, allow_pickle=True)
+
+        np.testing.assert_array_equal(loaded['points'], cube['points'])
+        np.testing.assert_array_equal(loaded['distances'], cube['distances'])
+        np.testing.assert_array_equal(loaded['metadata'], cube['metadata'])
+        np.testing.assert_array_equal(loaded['transect_ids'], cube['transect_ids'])
+
+
+class TestDateParsing:
+    """Test date parsing from LAS filenames."""
+
+    def test_parse_date_yyyymmdd_prefix(self):
+        """Test parsing YYYYMMDD at start of filename."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import parse_date_from_filename
+        from datetime import datetime
+
+        date = parse_date_from_filename("20171106_00590_00622_NoWaves.las")
+        assert date is not None
+        assert date == datetime(2017, 11, 6)
+
+    def test_parse_date_iso_format(self):
+        """Test parsing YYYY-MM-DD format."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import parse_date_from_filename
+        from datetime import datetime
+
+        date = parse_date_from_filename("scan_2017-11-06_data.las")
+        assert date is not None
+        assert date == datetime(2017, 11, 6)
+
+    def test_parse_date_yyyymmdd_anywhere(self):
+        """Test parsing YYYYMMDD anywhere in filename."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import parse_date_from_filename
+        from datetime import datetime
+
+        date = parse_date_from_filename("scan_20171106.las")
+        assert date is not None
+        assert date == datetime(2017, 11, 6)
+
+    def test_parse_date_invalid_returns_none(self):
+        """Test that invalid filenames return None."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import parse_date_from_filename
+
+        date = parse_date_from_filename("no_date_here.las")
+        assert date is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

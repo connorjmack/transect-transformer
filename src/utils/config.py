@@ -112,8 +112,9 @@ def load_config(
     # Apply overrides if provided
     if overrides:
         logger.info(f"Applying {len(overrides)} config overrides")
-        override_cfg = OmegaConf.create(overrides)
-        cfg = OmegaConf.merge(cfg, override_cfg)
+        for key, value in overrides.items():
+            # Use OmegaConf.update to properly handle dot-notation keys
+            OmegaConf.update(cfg, key, value)
 
     # Validate if requested
     if validate:

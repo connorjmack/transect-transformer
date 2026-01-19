@@ -900,7 +900,7 @@ def main():
             args.mop_min = mop_min
         if args.mop_max is None:
             args.mop_max = mop_max
-        logger.info(f"Beach '{args.beach}' selected: MOP range {args.mop_min}-{args.mop_max}")
+        logger.debug(f"Beach '{args.beach}' selected: MOP range {args.mop_min}-{args.mop_max}")
 
     # Validate inputs
     if not args.transects.exists():
@@ -921,7 +921,7 @@ def main():
             return 1
 
         survey_df = pd.read_csv(args.survey_csv)
-        logger.info(f"Loaded survey CSV with {len(survey_df)} rows")
+        logger.debug(f"Loaded survey CSV with {len(survey_df)} rows")
 
         if args.path_col not in survey_df.columns:
             logger.error(f"Path column '{args.path_col}' not found in CSV. Available: {survey_df.columns.tolist()}")
@@ -931,12 +931,12 @@ def main():
         if args.mop_min is not None and 'MOP1' in survey_df.columns:
             original_count = len(survey_df)
             survey_df = survey_df[survey_df['MOP2'] >= args.mop_min]
-            logger.info(f"Filtered MOP2 >= {args.mop_min}: {original_count} -> {len(survey_df)} rows")
+            logger.debug(f"Filtered MOP2 >= {args.mop_min}: {original_count} -> {len(survey_df)} rows")
 
         if args.mop_max is not None and 'MOP2' in survey_df.columns:
             original_count = len(survey_df)
             survey_df = survey_df[survey_df['MOP1'] <= args.mop_max]
-            logger.info(f"Filtered MOP1 <= {args.mop_max}: {original_count} -> {len(survey_df)} rows")
+            logger.debug(f"Filtered MOP1 <= {args.mop_max}: {original_count} -> {len(survey_df)} rows")
 
         # Extract paths and convert for current OS
         target_os = args.target_os if args.target_os else get_current_os()
@@ -951,9 +951,9 @@ def main():
             csv_paths.append(Path(converted))
 
         las_files.extend(csv_paths)
-        logger.info(f"Added {len(csv_paths)} LAS files from CSV (target OS: {target_os})")
+        logger.debug(f"Added {len(csv_paths)} LAS files from CSV (target OS: {target_os})")
         if converted_count > 0:
-            logger.info(f"  Converted {converted_count} paths for {target_os}")
+            logger.debug(f"  Converted {converted_count} paths for {target_os}")
 
     if not las_files:
         logger.error("No LAS files specified. Use --las-dir, --las-files, or --survey-csv")
@@ -963,7 +963,7 @@ def main():
     if args.limit is not None:
         original_count = len(las_files)
         las_files = las_files[:args.limit]
-        logger.info(f"Limited to first {args.limit} of {original_count} LAS files (--limit)")
+        logger.debug(f"Limited to first {args.limit} of {original_count} LAS files (--limit)")
 
     # Substitute LAZ files if --prefer-laz is set
     if args.prefer_laz:
@@ -980,9 +980,9 @@ def main():
     if args.prefer_copc:
         las_files, n_copc = substitute_copc_files(las_files, verbose=True)
         if n_copc > 0:
-            logger.info(f"Substituted {n_copc} files with COPC versions (10-100x faster loading)")
+            logger.debug(f"Substituted {n_copc} files with COPC versions (10-100x faster loading)")
         else:
-            logger.info("No COPC versions found - using original LAS files")
+            logger.debug("No COPC versions found - using original LAS files")
 
     # Check all files exist
     for f in las_files:

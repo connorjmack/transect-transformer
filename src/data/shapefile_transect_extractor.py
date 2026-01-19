@@ -214,7 +214,7 @@ class ShapefileTransectExtractor:
         self.buffer_m = buffer_m
         self.min_points = min_points
 
-        logger.info(
+        logger.debug(
             f"Initialized ShapefileTransectExtractor: {n_points} points, "
             f"{buffer_m}m buffer, min {min_points} points"
         )
@@ -233,9 +233,9 @@ class ShapefileTransectExtractor:
         """
         shapefile_path = Path(shapefile_path)
         gdf = gpd.read_file(shapefile_path)
-        logger.info(f"Loaded {len(gdf)} transect lines from {shapefile_path}")
-        logger.info(f"CRS: {gdf.crs}")
-        logger.info(f"Bounds: {gdf.total_bounds}")
+        logger.debug(f"Loaded {len(gdf)} transect lines from {shapefile_path}")
+        logger.debug(f"CRS: {gdf.crs}")
+        logger.debug(f"Bounds: {gdf.total_bounds}")
         return gdf
 
     def load_las_file(
@@ -253,7 +253,7 @@ class ShapefileTransectExtractor:
             Dictionary with point cloud data arrays
         """
         las_path = Path(las_path)
-        logger.info(f"Loading LAS file: {las_path}")
+        logger.debug(f"Loading LAS file: {las_path}")
         las = laspy.read(las_path)
 
         # Create single XYZ array and use views for x, y, z (reduces copies)
@@ -305,10 +305,10 @@ class ShapefileTransectExtractor:
         else:
             data['num_returns'] = np.ones(n_points, dtype=np.float32)
 
-        logger.info(f"Loaded {n_points:,} points")
-        logger.info(f"  X range: {xyz[:, 0].min():.2f} - {xyz[:, 0].max():.2f}")
-        logger.info(f"  Y range: {xyz[:, 1].min():.2f} - {xyz[:, 1].max():.2f}")
-        logger.info(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
+        logger.debug(f"Loaded {n_points:,} points")
+        logger.debug(f"  X range: {xyz[:, 0].min():.2f} - {xyz[:, 0].max():.2f}")
+        logger.debug(f"  Y range: {xyz[:, 1].min():.2f} - {xyz[:, 1].max():.2f}")
+        logger.debug(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
 
         return data
 
@@ -1210,8 +1210,8 @@ class ShapefileTransectExtractor:
                 logger.debug(f"Skipping {las_path.name}: no overlap with transects")
 
         if skipped_files > 0:
-            logger.info(f"Skipped {skipped_files} LAS files with no transect overlap")
-        logger.info(f"Processing {len(valid_las_files)} LAS files with potential overlap")
+            logger.debug(f"Skipped {skipped_files} LAS files with no transect overlap")
+        logger.debug(f"Processing {len(valid_las_files)} LAS files with potential overlap")
 
         if len(valid_las_files) == 0:
             logger.warning("No LAS files overlap with transects!")
@@ -1242,7 +1242,7 @@ class ShapefileTransectExtractor:
             # Use spawn method for compatibility
             ctx = mp.get_context('spawn')
 
-            logger.info(f"Processing {len(valid_las_files)} LAS files with {n_workers} workers...")
+            logger.debug(f"Processing {len(valid_las_files)} LAS files with {n_workers} workers...")
 
             with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as executor:
                 # Submit all jobs
@@ -1313,12 +1313,12 @@ class ShapefileTransectExtractor:
                 gc.collect()
 
                 if not show_progress or not HAS_TQDM:
-                    logger.info(
+                    logger.debug(
                         f"  {result['las_source']}: {result['extracted']} extracted, "
                         f"{result['skipped']} skipped (of {result['candidates']} candidates)"
                     )
 
-        logger.info(f"Total: {total_extracted} transect-epochs extracted, {total_skipped} skipped")
+        logger.debug(f"Total: {total_extracted} transect-epochs extracted, {total_skipped} skipped")
 
         if len(all_features) == 0:
             logger.warning("No transects extracted!")

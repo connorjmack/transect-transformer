@@ -131,24 +131,13 @@ python evaluate.py --checkpoint checkpoints/best.pt --data_dir data/processed/ -
 # Run all tests (216 tests)
 pytest tests/ -v
 
-# Run model tests only (151 tests)
+# Run specific test suite or file
 pytest tests/test_models/ -v
-
-# Run specific test file
-pytest tests/test_models/test_cliffcast.py -v
-pytest tests/test_models/test_transect_encoder.py -v
-pytest tests/test_models/test_environmental_encoder.py -v
-pytest tests/test_models/test_fusion.py -v
-pytest tests/test_models/test_prediction_heads.py -v
-
-# Run tests for data pipeline
 pytest tests/test_data/ -v
+pytest tests/test_models/<test_name>.py -v
 
-# Run tests with coverage report
-pytest tests/test_models/ --cov=src/models --cov-report=html
-
-# Type checking
-mypy src/models/
+# Run with coverage report
+pytest tests/ --cov=src --cov-report=html
 ```
 
 ### Inference
@@ -159,75 +148,19 @@ python predict.py --input data/new_site/ --checkpoint checkpoints/best.pt --outp
 
 ### Data Preprocessing
 ```bash
-# Extract transects from LiDAR using predefined transect lines (shapefile)
-python scripts/processing/extract_transects.py \
-    --transects data/mops/transects_10m/transect_lines.shp \
-    --las-dir data/raw/lidar/ \
-    --output data/processed/transects.npz \
-    --buffer 1.0 \
-    --n-points 128 \
-    --visualize
+# Extract transects from survey CSV (recommended workflow)
+python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --beach delmar --output data/processed/delmar.npz
+# Beaches: blacks, torrey, delmar, solana, sanelijo, encinitas (or use --mop-min/--mop-max for custom ranges)
+# Add --prefer-laz for faster COPC.LAZ loading (10-100x speedup if available)
+# Add --target-os linux for cross-platform path conversion
 
-# Extract transects from survey CSV (recommended for large datasets)
-python scripts/processing/extract_transects.py \
-    --transects data/mops/transects_10m/transect_lines.shp \
-    --survey-csv data/raw/master_list.csv \
-    --beach delmar \
-    --output data/processed/delmar.npz
+# Subset existing cube by MOP range
+python scripts/processing/subset_transects.py --input data/processed/all_transects.npz --output data/processed/delmar.npz --beach delmar
+# Add --list to view transects in a cube file
 
-# Available --beach options: blacks, torrey, delmar, solana, sanelijo, encinitas
-# Or use --mop-min and --mop-max for custom ranges
-
-# Subset existing cube by MOP range (recommended workflow)
-# 1. Extract all transects at once
-# 2. Subset into beach-specific files
-python scripts/processing/subset_transects.py \
-    --input data/processed/all_transects.npz \
-    --output data/processed/delmar.npz \
-    --beach delmar
-
-# List transects in a cube file
-python scripts/processing/subset_transects.py \
-    --input data/processed/all_transects.npz \
-    --list
-
-# Cross-platform: paths auto-convert between Mac (/Volumes/group/...) and Linux (/project/group/...)
-# Force Linux paths when running on Linux with Mac-formatted CSV:
-python scripts/processing/extract_transects.py \
-    --transects data/mops/transects_10m/transect_lines.shp \
-    --survey-csv data/raw/master_list.csv \
-    --target-os linux \
-    --output data/processed/all_transects.npz
-
-# Use LAZ/COPC.LAZ files instead of LAS (faster loading, smaller files)
-# REQUIRES .laz or .copc.laz versions to exist (errors if not found)
-# Priority: .copc.laz (best) > .laz (good) > .las (fallback)
-python scripts/processing/extract_transects.py \
-    --transects data/mops/transects_10m/transect_lines.shp \
-    --survey-csv data/raw/master_list.csv \
-    --prefer-laz \
-    --output data/processed/all_transects.npz
-
-# COPC.LAZ files provide 10-100x faster loading via spatial indexing
-# Script automatically detects and uses them
-
-# Download CDIP wave data (all San Diego MOPs 520-764)
-python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --start-date 2017-01-01 --end-date 2025-12-31
-
-# Download wave data for specific beach
+# Download CDIP wave data
 python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --beach delmar
-
-# Download custom MOP range
-python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --mop-min 595 --mop-max 620
-
-# Verify existing CDIP downloads
-python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --verify-only
-
-# Download precipitation data
-python scripts/download_precip_data.py --region san_diego --start_date 2023-01-01 --end_date 2024-01-01
-
-# Full preprocessing pipeline
-python scripts/prepare_dataset.py --lidar_dir data/raw/lidar/ --output data/processed/ --spacing_m 10
+# Or use --start-date/--end-date, --mop-min/--mop-max, --verify-only
 ```
 
 ### Interactive Apps
@@ -248,49 +181,28 @@ The transect viewer supports (cube format NPZ files):
 
 ### Visualization Scripts (Publication Figures)
 ```bash
-# Generate wave climate appendix figures (8 comprehensive figures)
+# Generate wave climate figures (8 figures: distributions, periods, directions, power, seasonal, storms, spatial, extremes)
 python scripts/visualization/wave_climate_figures.py --cdip-dir data/raw/cdip/ --output figures/appendix/
 
 # Quick wave summary (4-panel overview)
 python scripts/visualization/quick_wave_summary.py --cdip-dir data/raw/cdip/ --output figures/appendix/
 
-# Generate PRISM atmospheric data figures (3 comprehensive figures)
+# Generate PRISM atmospheric figures (3 figures: overview, distributions, extremes)
 python scripts/visualization/plot_prism_coverage.py --atmos-dir data/processed/atmospheric/ --output-dir figures/appendix/
-
-# Generate specific figure types
-python scripts/visualization/wave_climate_figures.py --figures A1 A3 A5  # Specific wave figures
-python scripts/visualization/plot_prism_coverage.py --figure-type overview  # Only overview
 ```
 
-**Wave Climate Figures** (2017-2025, 193 MOPs):
-- **Figure A1**: Wave height distributions with Weibull fits (6 beaches)
-- **Figure A2**: Wave period characteristics (Hs vs Tp hexbin with marginals)
-- **Figure A3**: Wave direction roses (6 polar plots, weighted by height)
-- **Figure A4**: Wave power statistics (box plots, CDFs, distributions, table)
-- **Figure A5**: Seasonal patterns (monthly means, seasonal boxes, annual heatmap)
-- **Figure A6**: Storm climatology (time series, duration, frequency, intensity)
-- **Figure A7**: Spatial wave climate (latitudinal profiles, summary table)
-- **Figure A8**: Extreme value analysis (GEV fit, return periods, design levels)
-
-**PRISM Atmospheric Figures** (2017-2025, 6 beaches):
-- **prism_overview.png**: 3x3 grid with beach map, long-term trends (monthly), seasonal climatology, annual totals, spatio-temporal heatmap, coverage table
-- **prism_feature_distributions.png**: 5x3 grid with histograms for 15 derived features (cumulative precip, API, wet-dry cycles, VPD, freeze-thaw)
-- **prism_extreme_events.png**: 2x2 grid with extreme precipitation events (>25mm, >50mm), API time series, VPD time series
-
-**Output Location**: All figures save to `figures/appendix/` by default
-**Requirements**: See `scripts/visualization/README.md` for detailed documentation
+See `scripts/visualization/README.md` for complete figure descriptions and requirements.
 
 ## Architecture Overview
 
 ### Model Components (IMPLEMENTED & TESTED)
 
-All model components are fully implemented with 100% test coverage. Import with:
+**Status**: All components fully implemented with 100% test coverage (216 tests passing). Import with:
 ```python
 from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, AtmosphericEncoder
 ```
 
 1. **SpatioTemporalTransectEncoder** (`src/models/transect_encoder.py`): Hierarchical attention encoder for multi-temporal cliff geometry
-   - **Status**: ✅ Implemented, 28 tests passing, 100% coverage
    - **Input**: Cube format (B, T, N, 12) where T = number of LiDAR epochs, N = 128 points per transect
    - **Spatial attention** (within each timestep): Self-attention over N=128 points to learn cliff geometry
    - **Temporal attention** (across timesteps): Self-attention over T epochs to learn cliff evolution
@@ -309,7 +221,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
      ```
 
 2. **EnvironmentalEncoder** (`src/models/environmental_encoder.py`): Time-series encoder for forcing data
-   - **Status**: ✅ Implemented, 37 tests passing, 100% coverage
    - Shared architecture for both wave and atmospheric inputs
    - Uses learned temporal position embeddings
    - Includes day-of-year seasonality embedding (handles leap years with 367 days)
@@ -334,7 +245,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
      ```
 
 3. **CrossAttentionFusion** (`src/models/fusion.py`): Fuses cliff geometry with environmental context
-   - **Status**: ✅ Implemented, 25 tests passing, 100% coverage
    - Cliff temporal embeddings are queries (Q)
    - Concatenated environmental embeddings (wave + atmos) are keys/values (K,V)
    - Learns "which environmental conditions explain each cliff location's state"
@@ -352,7 +262,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
      ```
 
 4. **PredictionHeads** (`src/models/prediction_heads.py`): Multi-task prediction outputs
-   - **Status**: ✅ Implemented, 35 tests passing, 100% coverage
    - All heads operate on pooled representation from fusion module
    - **RiskIndexHead**: Sigmoid output, range [0,1]
    - **CollapseProbabilityHead**: 4 time horizons (1wk, 1mo, 3mo, 1yr), multi-label binary (sigmoid per horizon)
@@ -375,7 +284,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
      ```
 
 5. **CliffCast** (`src/models/cliffcast.py`): Full model assembly
-   - **Status**: ✅ Implemented, 26 tests passing, 100% coverage
    - Instantiates all encoders, fusion module, and prediction heads
    - Flexible configuration for all hyperparameters
    - Heads can be selectively enabled/disabled for phased training
@@ -431,7 +339,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
 ### Data Components
 
 1. **ShapefileTransectExtractor** (`src/data/shapefile_transect_extractor.py`): Transect extraction from LiDAR
-   - **Status**: ✅ Implemented, 30 tests passing
    - Uses predefined transect lines from a shapefile (e.g., MOPS transects)
    - Extracts points within buffer distance, projects onto transect line
    - Resamples to N=128 points with 12 features per point
@@ -439,7 +346,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
    - **Metadata (12)**: cliff_height_m, mean_slope_deg, max_slope_deg, toe_elevation_m, top_elevation_m, orientation_deg, transect_length_m, latitude, longitude, transect_id, mean_intensity, dominant_class
 
 2. **CDIPWaveLoader** (`src/data/cdip_wave_loader.py`): CDIP wave data access
-   - **Status**: ✅ Implemented and tested
    - Fetches nearshore wave predictions from CDIP MOP system via THREDDS/OPeNDAP
    - Supports local NetCDF files (recommended) or remote THREDDS access
    - Data at 100m alongshore spacing, 10m water depth, hourly from 2000-present
@@ -449,7 +355,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
    - **Usage**: See "Wave Data (CDIP MOP System)" section below
 
 3. **WaveLoader** (`src/data/wave_loader.py`): Wave data integration for training
-   - **Status**: ✅ Implemented, 18 tests passing
    - Manages loading CDIP data aligned to LiDAR scan dates
    - LRU caching of WaveData objects (default: 50 MOPs)
    - Graceful degradation: returns zeros if data unavailable (with warning)
@@ -476,7 +381,6 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
      ```
 
 4. **WaveMetricsCalculator** (`src/data/wave_features.py`): Derived wave feature engineering
-   - **Status**: ✅ Implemented, 25+ tests passing
    - Computes 19 physically-motivated features from raw CDIP wave data
    - **Features computed**:
      - **Raw (4)**: hs, tp, dp, power
@@ -487,34 +391,9 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
      - **Temporal (2)**: rolling_max_7d, hs_trend_slope
    - Can output summary metrics (for analysis) or time series features (for model input)
    - Integrated with WaveLoader via `compute_derived_features` flag
-   - **Usage**:
-     ```python
-     from src.data.wave_features import WaveMetricsCalculator, WaveMetricsConfig
-
-     # Compute time series features (for model input)
-     config = WaveMetricsConfig(lookback_days=90, resample_hours=6)
-     calculator = WaveMetricsCalculator(config)
-     features, doy = calculator.compute_timeseries_features(
-         df,  # pandas DataFrame with hs, tp, dp columns
-         cliff_orientation_deg=270,
-         beach_slope=0.1
-     )
-     # Returns: (T, 6) array [hs, tp, dp, power, shore_normal, runup]
-
-     # Compute summary metrics (for analysis/visualization)
-     metrics = calculator.compute_all_metrics(df, cliff_orientation_deg=270)
-     # Returns: dict with all 19 metrics
-
-     # CLI for batch processing
-     python src/data/wave_features.py \
-         --input data/raw/cdip/D0582_hindcast.nc \
-         --scan-date 2023-12-15 \
-         --lookback-days 90 \
-         --cliff-orientation 270
-     ```
+   - Has CLI for batch processing: `python src/data/wave_features.py --input <nc_file> --scan-date <date>`
 
 5. **AtmosphericLoader** (`src/data/atmos_loader.py`): Atmospheric data integration
-   - **Status**: ✅ Implemented, 27 tests passing
    - Loads pre-computed atmospheric features from per-beach parquet files
    - 90-day lookback window at daily intervals (T_a=90)
    - 24 features: precip, temperature, API, wet/dry cycles, freeze-thaw, VPD
@@ -593,14 +472,7 @@ pytest tests/test_models/ -v
 pytest tests/test_models/ --cov=src/models --cov-report=html
 ```
 
-**Test Organization**:
-- `tests/test_models/test_transect_encoder.py` - 28 tests for spatio-temporal encoder
-- `tests/test_models/test_environmental_encoder.py` - 37 tests for wave/atmospheric encoders
-- `tests/test_models/test_fusion.py` - 25 tests for cross-attention fusion
-- `tests/test_models/test_prediction_heads.py` - 35 tests for all prediction heads
-- `tests/test_models/test_cliffcast.py` - 26 tests for full model integration
-- `tests/test_data/test_transect_extractor.py` - 30 tests for data pipeline
-- `tests/test_apps/test_transect_viewer.py` - 27 tests for viewer app
+**Test Organization**: Tests organized in `tests/test_models/` (151 tests), `tests/test_data/` (30+ tests), `tests/test_apps/` (27+ tests)
 
 **Test Coverage**:
 - Shape validation: All tensor shapes verified at each stage
@@ -690,28 +562,7 @@ Survey CSV files use MOP1/MOP2 columns to indicate coverage range per survey.
 - Total timesteps: T_w = 360 for 90 days @ 6hr
 - Circular mean for direction during resampling (sin/cos components)
 
-**Integration Pattern**:
-```python
-from src.data.wave_loader import WaveLoader
-
-# Initialize loader with local CDIP directory
-loader = WaveLoader('data/raw/cdip/')
-
-# Get wave data for single scan (MOP 582, Dec 15, 2023)
-features, doy = loader.get_wave_for_scan(mop_id=582, scan_date='2023-12-15')
-print(features.shape)  # (360, 4) - 90 days @ 6hr
-print(doy.shape)       # (360,) - day-of-year for seasonality
-
-# Batch loading for multiple transects
-mop_ids = [582, 583, 584]
-scan_dates = ['2023-12-15', '2023-12-15', '2023-12-15']
-features, doy = loader.get_batch_wave(mop_ids, scan_dates)
-print(features.shape)  # (3, 360, 4)
-
-# Validate coverage before training
-coverage = loader.validate_coverage(mop_ids, scan_dates)
-print(f"Coverage: {coverage['coverage_pct']:.1f}%")
-```
+**Usage**: See WaveLoader component in Data Components section for integration patterns and examples.
 
 **Download Workflow**:
 1. **Batch download**: Use `download_cdip_data.py` to populate `data/raw/cdip/`
@@ -752,14 +603,6 @@ data/
 │   └── ...
 ```
 
-**Current Integration Status** (as of 2026-01-19):
-- ✅ **CDIPWaveLoader**: Fully implemented and tested
-- ✅ **WaveLoader**: Fully implemented with 18 unit tests passing
-- ✅ **Download Script**: Successfully downloaded 183/245 San Diego MOPs (~26GB)
-- ✅ **Configuration**: Wave data settings added to configs/default.yaml
-- ✅ **Documentation**: Complete usage examples and API documentation
-- 🔄 **Next Step**: Integrate WaveLoader into PyTorch Dataset class for training
-
 ### Attention Interpretation
 Multiple attention mechanisms reveal different physical attributions:
 
@@ -776,38 +619,6 @@ Multiple attention mechanisms reveal different physical attributions:
 - High attention to specific wave timesteps → those storms contributed to erosion
 - Spatial patterns in cliff points attending to events → local vs. regional forcing
 - Use `return_env_attention=True` to extract weights for visualization
-
-## Testing Strategy
-
-### Current Test Suite (65 tests)
-Run all tests: `pytest tests/ -v`
-
-**test_data/test_transect_extractor.py** (30 tests):
-- `TestShapefileTransectExtractorInit`: Initialization, feature/metadata names
-- `TestTransectDirection`: Direction vector computation from LineString
-- `TestTransectExtraction`: Point extraction and resampling
-- `TestFeatureComputation`: Feature value ranges, metadata computation
-- `TestSaveLoad`: NPZ save/load roundtrip
-- `TestEdgeCases`: Insufficient points, edge case handling
-- `TestFullPipeline`: End-to-end extraction with mocked LAS
-- `TestCubeFormat`: Flat-to-cube conversion, temporal ordering, save/load
-- `TestSubsetTransects`: MOP number parsing, cube subsetting by range
-- `TestPathConversion`: Cross-platform path conversion (Mac/Linux)
-- `TestDateParsing`: LAS filename date extraction
-
-**test_apps/test_transect_viewer.py** (27 tests):
-- `TestDataLoader`: Cube format detection, dimension extraction, transect retrieval, temporal slicing
-- `TestValidators`: NaN checking, value range validation, dataset validation, statistics
-- `TestSaveLoadRoundtrip`: NPZ roundtrip with string arrays
-
-**test_utils.py** (8 tests):
-- Config loading, validation, overrides, save/load
-
-### Test Conventions
-- Test shapes obsessively: `assert tensor.shape == expected_shape`
-- Verify no NaN: `assert not torch.isnan(tensor).any()`
-- Check value ranges (e.g., sigmoid outputs in [0,1])
-- Use synthetic data fixtures for deterministic testing
 
 ## Development Workflow
 
@@ -855,18 +666,8 @@ Log to Weights & Biases:
 
 ## Future Extensions
 
-### Option C: 3D Context Enhancement
-When transects are insufficient for complex geometries (caves, arches):
-- Add `Context3DExtractor` module using k-nearest neighbors in full point cloud
-- Mini-PointNet aggregates 3D neighborhood features
-- Concatenate with transect point features before encoder
-- Enable via config: `use_3d_context: true`
-
-### Transfer Learning
-Model trained on San Diego can be fine-tuned on other coastlines:
-- Oregon, Malibu, Great Lakes
-- Freeze encoders, retrain prediction heads
-- Or full fine-tuning with lower learning rate
+- **3D Context Enhancement**: For complex geometries (caves, arches), add `Context3DExtractor` module using k-nearest neighbors
+- **Transfer Learning**: Fine-tune on other coastlines (Oregon, Malibu, Great Lakes) by freezing encoders and retraining heads
 
 ## Success Metrics
 

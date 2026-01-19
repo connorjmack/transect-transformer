@@ -60,13 +60,20 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-# Add project root to path
-project_root = Path(__file__).parent.parent
+# Add project root to path for imports
+# __file__ is scripts/processing/extract_transects.py
+# .parent.parent.parent gets us to the project root
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.data.shapefile_transect_extractor import ShapefileTransectExtractor
 from src.utils.logging import setup_logger
-from scripts.processing.qc_cube import run_qc
+
+# Import QC module - handle both direct execution and module import
+try:
+    from qc_cube import run_qc  # Direct script execution
+except ImportError:
+    from scripts.processing.qc_cube import run_qc  # Module import (e.g., from tests)
 
 logger = setup_logger(__name__, level="INFO")
 

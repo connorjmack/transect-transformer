@@ -71,23 +71,23 @@ class PRISMDownloader:
     """Download PRISM daily climate data.
 
     PRISM provides daily gridded climate data at 4km resolution. Data is
-    distributed as BIL (Band Interleaved by Line) format files with
-    accompanying header files.
+    distributed as BIL (Band Interleaved by Line) format files within
+    ZIP archives, accessible via anonymous HTTPS/FTP.
 
     Attributes:
         output_dir: Directory to save downloaded files
         variables: List of PRISM variables to download
     """
 
-    # PRISM base URL for daily data
-    BASE_URL = "https://prism.oregonstate.edu/fetchData.php"
+    # PRISM data directory URL (anonymous access)
+    BASE_URL = "https://data.prism.oregonstate.edu/time_series/us/an/4km"
 
-    # Alternative direct download URL pattern
-    # Format: PRISM_{var}_stable_4kmD2_{YYYYMMDD}_bil.zip
-    DIRECT_URL = "https://prism.oregonstate.edu/downloads/grid/{var}/daily/{year}/PRISM_{var}_stable_4kmD2_{date}_bil.zip"
+    # URL pattern for daily data files
+    # Format: {BASE_URL}/{var}/daily/{year}/prism_{var}_us_25m_{YYYYMMDD}.zip
+    DAILY_URL = "{base}/{var}/daily/{year}/prism_{var}_us_25m_{date}.zip"
 
     # Available variables
-    VARIABLES = ['ppt', 'tmin', 'tmax', 'tmean', 'tdmean']
+    VARIABLES = ['ppt', 'tmin', 'tmax', 'tmean', 'tdmean', 'vpdmin', 'vpdmax']
 
     # PRISM grid parameters (CONUS)
     GRID_PARAMS = {
@@ -202,7 +202,7 @@ class PRISMDownloader:
 
     def _get_output_path(self, var: str, date: datetime) -> Path:
         """Get output file path for a variable and date."""
-        filename = f"PRISM_{var}_stable_4kmD2_{date.strftime('%Y%m%d')}_bil.bil"
+        filename = f"PRISM_{var}_{date.strftime('%Y%m%d')}.tif"
         return self.output_dir / var / filename
 
     def _download_single(
@@ -213,37 +213,58 @@ class PRISMDownloader:
     ) -> None:
         """Download a single PRISM file.
 
-        Note: PRISM requires authentication for bulk downloads. For research
-        use, you may need to register at https://prism.oregonstate.edu/ and
-        use their official download tools.
-
-        This implementation provides a template that can be adapted based on
-        your access method (direct download, API, or FTP).
+        Downloads ZIP file from PRISM data server and extracts the BIL file.
+        Uses anonymous HTTPS access (no authentication required).
         """
-        # PRISM data is available through their web interface
-        # For bulk downloads, consider using:
-        # 1. PRISM's official download tools
-        # 2. Google Earth Engine (has PRISM dataset)
-        # 3. Climate Engine (https://climateengine.com)
-
-        # Placeholder for actual download logic
-        # The exact method depends on your PRISM access arrangement
+        import zipfile
+        import tempfile
+        from urllib.request import urlretrieve
 
         date_str = date.strftime('%Y%m%d')
         year = date.year
 
-        # Example URL pattern (may need adjustment based on PRISM's current API)
-        url = self.DIRECT_URL.format(var=var, year=year, date=date_str)
+        # Build download URL
+        url = self.DAILY_URL.format(
+            base=self.BASE_URL,
+            var=var,
+            year=year,
+            date=date_str
+        )
 
         logger.debug(f"Downloading: {url}")
 
-        # For now, create a placeholder that indicates download is needed
-        # In production, replace with actual download logic
-        raise NotImplementedError(
-            f"PRISM download requires authentication. "
-            f"Please download manually from {url} or use Google Earth Engine. "
-            f"See: https://prism.oregonstate.edu/documents/PRISM_downloads_web_service.pdf"
-        )
+        # Download to temporary file
+        with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            urlretrieve(url, tmp_path)
+
+            # Extract GeoTIFF file from ZIP
+            with zipfile.ZipFile(tmp_path, 'r') as zf:
+                # Find the .tif file in the archive
+                tif_files = [f for f in zf.namelist() if f.endswith('.tif')]
+                if not tif_files:
+                    raise ValueError(f"No .tif file found in {url}")
+
+                # Extract to output directory
+                tif_name = tif_files[0]
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Change output path to .tif extension
+                output_tif = output_path.with_suffix('.tif')
+
+                # Extract and rename to our standard naming
+                with zf.open(tif_name) as src:
+                    with open(output_tif, 'wb') as dst:
+                        dst.write(src.read())
+
+            logger.debug(f"Extracted: {output_tif}")
+
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     def extract_grid_value(
         self,

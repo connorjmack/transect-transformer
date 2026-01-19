@@ -291,16 +291,17 @@ class CliffCast(nn.Module):
 
     def get_attention_weights(
         self,
-        # Same inputs as forward()
+        # Required inputs
         point_features: torch.Tensor,
         metadata: torch.Tensor,
         distances: torch.Tensor,
-        timestamps: Optional[torch.Tensor] = None,
         wave_features: torch.Tensor,
+        atmos_features: torch.Tensor,
+        # Optional inputs
+        timestamps: Optional[torch.Tensor] = None,
         wave_doy: Optional[torch.Tensor] = None,
         wave_timestamps: Optional[torch.Tensor] = None,
         wave_padding_mask: Optional[torch.Tensor] = None,
-        atmos_features: torch.Tensor,
         atmos_doy: Optional[torch.Tensor] = None,
         atmos_timestamps: Optional[torch.Tensor] = None,
         atmos_padding_mask: Optional[torch.Tensor] = None,

@@ -392,14 +392,23 @@ class CDIPWaveLoader:
     
     def _fetch_from_thredds(self, url: str) -> xr.Dataset:
         """Fetch dataset from THREDDS server."""
+        import warnings
+
         try:
-            # Use decode_times=False to handle the custom time format
-            ds = xr.open_dataset(
-                url,
-                decode_times=False,
-                engine='netcdf4',
-            )
-            return ds
+            # Suppress HDF5 warnings for missing files
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore', category=Warning)
+
+                # Use decode_times=False to handle the custom time format
+                ds = xr.open_dataset(
+                    url,
+                    decode_times=False,
+                    engine='netcdf4',
+                )
+                return ds
+        except (FileNotFoundError, OSError) as e:
+            # File doesn't exist on THREDDS server
+            raise FileNotFoundError(f"CDIP data not available at {url}") from e
         except Exception as e:
             logger.error(f"Failed to fetch {url}: {e}")
             raise

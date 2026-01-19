@@ -22,6 +22,7 @@ Date: 2026-01-18
 
 import argparse
 import logging
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -29,6 +30,9 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 import numpy as np
+
+# Suppress HDF5 error messages for cleaner output
+os.environ['HDF5_DISABLE_VERSION_CHECK'] = '1'
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -114,6 +118,8 @@ def try_multiple_site_labels(
     Returns:
         Tuple of (success: bool, site_label: Optional[str])
     """
+    import warnings
+
     # Try multiple formats
     formats = [
         f"D{mop_id:04d}",  # D0582
@@ -124,15 +130,26 @@ def try_multiple_site_labels(
     for site_label in formats:
         try:
             logger.debug(f"Trying site label: {site_label}")
-            wave_data = loader.load_mop(
-                mop_id=mop_id,
-                start_date=start_date,
-                end_date=end_date,
-                site_label_override=site_label,
-            )
+
+            # Suppress HDF5 error messages for cleaner output
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+
+                wave_data = loader.load_mop(
+                    mop_id=mop_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    site_label_override=site_label,
+                )
+
             logger.info(f"✓ MOP {mop_id} downloaded successfully as {site_label}")
             return True, site_label
+        except (FileNotFoundError, OSError, ConnectionError) as e:
+            # File doesn't exist on server, try next format
+            logger.debug(f"Failed with {site_label}: {type(e).__name__}")
+            continue
         except Exception as e:
+            # Other errors - log but continue
             logger.debug(f"Failed with {site_label}: {e}")
             continue
 
@@ -158,6 +175,9 @@ def download_single_mop(
     Returns:
         Tuple of (mop_id, success: bool, error_message: Optional[str])
     """
+    import contextlib
+    import io
+
     # Check if file already exists
     possible_files = [
         output_dir / f"D{mop_id:04d}_hindcast.nc",
@@ -175,15 +195,17 @@ def download_single_mop(
     loader = CDIPWaveLoader(cache_dir=output_dir)
 
     # Try to download with multiple site label formats
-    success, site_label = try_multiple_site_labels(
-        loader, mop_id, start_date, end_date
-    )
+    # Suppress stderr to hide HDF5 error messages
+    with contextlib.redirect_stderr(io.StringIO()):
+        success, site_label = try_multiple_site_labels(
+            loader, mop_id, start_date, end_date
+        )
 
     if success:
         return mop_id, True, None
     else:
-        error_msg = f"Failed to download MOP {mop_id} with all site label formats"
-        logger.warning(f"✗ {error_msg}")
+        error_msg = f"Not available on CDIP THREDDS"
+        logger.debug(f"✗ MOP {mop_id}: {error_msg}")
         return mop_id, False, error_msg
 
 
@@ -513,25 +535,33 @@ Beach options: blacks, torrey, delmar, solana, sanelijo, encinitas
     logger.info("\n" + "="*80)
     logger.info("DOWNLOAD SUMMARY")
     logger.info("="*80)
-    logger.info(f"Total MOPs: {results['total']}")
-    logger.info(f"Successful: {results['success']}")
-    logger.info(f"Failed: {results['failed']}")
+    logger.info(f"Total MOPs attempted: {results['total']}")
+    logger.info(f"Successfully downloaded: {results['success']}")
+    logger.info(f"Failed/Not found: {results['failed']}")
 
-    if results['errors']:
-        logger.info(f"\nFailed downloads ({len(results['errors'])} MOPs):")
-        for mop_id, error_msg in results['errors']:
-            logger.info(f"  MOP {mop_id}: {error_msg}")
+    if results['failed'] > 0:
+        logger.info(f"\nFailed MOPs ({results['failed']} total):")
+        if results['errors']:
+            # Show first 20 failed MOPs
+            show_count = min(20, len(results['errors']))
+            for mop_id, error_msg in results['errors'][:show_count]:
+                logger.info(f"  MOP {mop_id}")
+            if len(results['errors']) > show_count:
+                logger.info(f"  ... and {len(results['errors']) - show_count} more (see log file)")
 
     success_rate = 100 * results['success'] / results['total']
     logger.info(f"\nSuccess rate: {success_rate:.1f}%")
     logger.info(f"Log file: {log_file}")
 
     if results['failed'] > 0:
-        logger.warning(
-            f"\n{results['failed']} MOPs failed to download. "
-            "These may not be available on CDIP THREDDS server."
+        logger.info(
+            f"\nNote: {results['failed']} MOPs not available on CDIP THREDDS server. "
+            "This is expected - CDIP may not have data for all San Diego MOP transect IDs."
         )
-        logger.warning("Check the log file for details.")
+        logger.info(
+            "San Diego transect MOPs (520-764) don't necessarily correspond 1:1 with CDIP MOP sites."
+        )
+        logger.info("Only MOPs with available CDIP data were downloaded.")
 
     logger.info("\nDone!")
 

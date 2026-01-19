@@ -212,10 +212,12 @@ def add_north_arrow(ax: plt.Axes, rotation_angle: float, xy=(0.06, 0.90)) -> Non
         zorder=20
     ))
 
-    # Add "N" label above the arrow
+    # Add "N" label to the right of the arrow (perpendicular, east side)
     label_offset = 0.03
-    label_x = cx + (size + label_offset) * np.cos(arrow_angle_rad) / aspect_ratio
-    label_y = cy + (size + label_offset) * np.sin(arrow_angle_rad)
+    # Right side is 90 degrees clockwise from arrow direction (-90 deg in standard coords)
+    label_angle_rad = arrow_angle_rad - np.pi/2
+    label_x = cx + (size/2 + label_offset) * np.cos(label_angle_rad) / aspect_ratio
+    label_y = cy + (size/2 + label_offset) * np.sin(label_angle_rad)
 
     ax.text(
         label_x, label_y, "N",
@@ -241,7 +243,7 @@ def nice_scale_length(map_width_m: float) -> float:
     return min(scaled_candidates, key=lambda c: abs(c - map_width_m / 6))
 
 
-def add_scale_bar(ax: plt.Axes, location=(0.88, 0.08)) -> None:
+def add_scale_bar(ax: plt.Axes, location=(0.94, 0.05)) -> None:
     """Add a publication-quality alternating scale bar in the bottom right."""
     x_min, x_max = ax.get_xlim()
     y_min, y_max = ax.get_ylim()

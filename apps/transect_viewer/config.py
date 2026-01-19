@@ -16,6 +16,7 @@ SUPPORTED_DATA_TYPES = {
 VIEW_MODES = [
     "Data Dashboard",
     "Single Transect Inspector",
+    "Temporal Slider",
     "Transect Evolution",
     "Cross-Transect View",
 ]

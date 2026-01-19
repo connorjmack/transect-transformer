@@ -13,13 +13,22 @@ The output is saved in CUBE FORMAT for spatio-temporal modeling:
   - transect_ids: (n_transects,) - unique transect IDs
   - epoch_names: (T,) - LAS filenames for each epoch
 
+Current per-point features (12):
+  distance_m, elevation_m, slope_deg, curvature, roughness,
+  intensity, red, green, blue, classification, return_number, num_returns
+
+TODO: Future enhancement - add per-point normal vectors (nx, ny, nz) computed from
+      the local point neighborhood. This will enable better characterization of
+      cliff face orientation and overhang detection.
+
 Usage:
-    python scripts/extract_transects.py \
-        --transects data/mops/transects_10m/transect_lines.shp \
-        --las-dir data/testing/ \
-        --output data/processed/transects_cube.npz \
-        --buffer 1.0 \
-        --n-points 128
+    python scripts/processing/extract_transects.py \\
+        --transects data/mops/transects_10m/transect_lines.shp \\
+        --las-dir data/testing/ \\
+        --output data/processed/transects_cube.npz \\
+        --buffer 1.0 \\
+        --n-points 128 \\
+        --visualize
 """
 
 import argparse

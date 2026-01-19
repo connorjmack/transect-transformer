@@ -1,4 +1,4 @@
-"""Cross-transect view for spatial analysis."""
+"""Cross-transect view for spatial analysis (cube format)."""
 
 import numpy as np
 import pandas as pd
@@ -7,7 +7,14 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from apps.transect_viewer import config
-from apps.transect_viewer.utils.data_loader import get_all_transect_ids, get_transect_by_id
+from apps.transect_viewer.utils.data_loader import (
+    get_all_transect_ids,
+    get_transect_by_id,
+    get_cube_dimensions,
+    get_epoch_dates,
+    is_cube_format,
+    get_epoch_slice,
+)
 
 
 def render_cross_transect():
@@ -17,19 +24,29 @@ def render_cross_transect():
         return
 
     data = st.session_state.data
+    is_cube = is_cube_format(data)
+    dims = get_cube_dimensions(data)
+    epoch_dates = get_epoch_dates(data)
+    epoch_idx = st.session_state.get('selected_epoch_idx', dims['n_epochs'] - 1)
 
     st.header("Cross-Transect View")
 
+    # Show which epoch is being displayed
+    if is_cube and epoch_dates:
+        st.info(f"Showing data for epoch: {epoch_dates[epoch_idx][:10]}")
+    elif is_cube:
+        st.info(f"Showing data for epoch {epoch_idx}")
+
     # Map section
-    _render_location_map(data)
+    _render_location_map(data, epoch_idx, is_cube)
 
     st.markdown("---")
 
     # Multi-transect comparison
-    _render_multi_transect_comparison(data)
+    _render_multi_transect_comparison(data, epoch_idx, is_cube)
 
 
-def _render_location_map(data: dict):
+def _render_location_map(data: dict, epoch_idx: int, is_cube: bool):
     """Render map of transect locations."""
     st.subheader("Transect Locations")
 
@@ -55,14 +72,21 @@ def _render_location_map(data: dict):
     else:
         color_idx = 0  # cliff_height_m
 
+    # Get metadata for specific epoch (cube format) or directly (flat format)
+    if is_cube:
+        # Use specific epoch metadata
+        epoch_metadata = metadata[:, epoch_idx, :]
+    else:
+        epoch_metadata = metadata
+
     # Create dataframe for plotting
     df = pd.DataFrame({
         'transect_id': transect_ids,
-        'x': metadata[:, lon_idx],
-        'y': metadata[:, lat_idx],
-        'color_value': metadata[:, color_idx],
-        'cliff_height': metadata[:, 0],
-        'mean_slope': metadata[:, 1],
+        'x': epoch_metadata[:, lon_idx],
+        'y': epoch_metadata[:, lat_idx],
+        'color_value': epoch_metadata[:, color_idx],
+        'cliff_height': epoch_metadata[:, 0],
+        'mean_slope': epoch_metadata[:, 1],
     })
 
     # Check if coordinates are UTM (large values)
@@ -137,7 +161,7 @@ def _render_location_map(data: dict):
             st.rerun()
 
 
-def _render_multi_transect_comparison(data: dict):
+def _render_multi_transect_comparison(data: dict, epoch_idx: int, is_cube: bool):
     """Render comparison of multiple selected transects."""
     st.subheader("Multi-Transect Comparison")
 
@@ -165,7 +189,8 @@ def _render_multi_transect_comparison(data: dict):
     fig = go.Figure()
 
     for i, tid in enumerate(selected_ids):
-        transect = get_transect_by_id(data, tid)
+        # Get transect for specific epoch
+        transect = get_transect_by_id(data, tid, epoch_idx=epoch_idx)
         color = config.EPOCH_COLORS[i % len(config.EPOCH_COLORS)]
 
         fig.add_trace(go.Scatter(
@@ -196,18 +221,22 @@ def _render_multi_transect_comparison(data: dict):
     # Summary table
     st.subheader("Selected Transects Summary")
 
+    metadata_names = data.get('metadata_names', [])
+    if isinstance(metadata_names, np.ndarray):
+        metadata_names = metadata_names.tolist()
+
     summary_data = []
     for tid in selected_ids:
-        transect = get_transect_by_id(data, tid)
+        transect = get_transect_by_id(data, tid, epoch_idx=epoch_idx)
         metadata = transect['metadata']
 
         summary_data.append({
             'ID': tid,
             'Cliff Height (m)': f"{metadata[0]:.2f}",
-            'Mean Slope (°)': f"{metadata[1]:.1f}",
-            'Max Slope (°)': f"{metadata[2]:.1f}",
+            'Mean Slope (deg)': f"{metadata[1]:.1f}",
+            'Max Slope (deg)': f"{metadata[2]:.1f}",
             'Length (m)': f"{metadata[6]:.1f}",
-            'Orientation (°)': f"{metadata[5]:.1f}",
+            'Orientation (deg)': f"{metadata[5]:.1f}",
         })
 
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)

@@ -8,12 +8,20 @@ Usage:
     streamlit run apps/transect_viewer/app.py
 """
 
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
 import streamlit as st
 
 from apps.transect_viewer import config
 from apps.transect_viewer.components.sidebar import render_sidebar
 from apps.transect_viewer.components.data_dashboard import render_dashboard
 from apps.transect_viewer.components.transect_inspector import render_inspector
+from apps.transect_viewer.components.temporal_slider import render_temporal_slider
 from apps.transect_viewer.components.evolution_view import render_evolution
 from apps.transect_viewer.components.cross_transect_view import render_cross_transect
 
@@ -23,11 +31,14 @@ def init_session_state():
     if 'data' not in st.session_state:
         st.session_state.data = None
 
-    if 'epochs' not in st.session_state:
-        st.session_state.epochs = {}
-
     if 'selected_transect_id' not in st.session_state:
         st.session_state.selected_transect_id = None
+
+    if 'selected_epoch_idx' not in st.session_state:
+        st.session_state.selected_epoch_idx = 0
+
+    if 'slider_epoch_idx' not in st.session_state:
+        st.session_state.slider_epoch_idx = 0
 
     if 'selected_feature' not in st.session_state:
         st.session_state.selected_feature = 'elevation_m'
@@ -67,11 +78,13 @@ def main():
         1. **Upload a file** using the file uploader in the sidebar, or
         2. **Enter a path** to an existing NPZ file
 
-        The viewer supports:
-        - **Data Dashboard**: Overview statistics and quality checks
-        - **Single Transect Inspector**: Detailed view of individual transects
-        - **Transect Evolution**: Compare transects across time epochs
+        The viewer supports **cube format** NPZ files with spatio-temporal data:
+        - **Data Dashboard**: Overview statistics, quality checks, and temporal coverage
+        - **Single Transect Inspector**: Detailed view of individual transects at any epoch
+        - **Transect Evolution**: Analyze temporal changes across all epochs (built-in)
         - **Cross-Transect View**: Spatial analysis across multiple transects
+
+        Cube format shape: `(n_transects, T, N, 12)` where T = temporal epochs
         """)
         return
 
@@ -80,6 +93,8 @@ def main():
         render_dashboard()
     elif view_mode == "Single Transect Inspector":
         render_inspector()
+    elif view_mode == "Temporal Slider":
+        render_temporal_slider()
     elif view_mode == "Transect Evolution":
         render_evolution()
     elif view_mode == "Cross-Transect View":

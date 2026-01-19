@@ -1,108 +1,138 @@
-"""Transect evolution view for temporal comparison."""
+"""Transect evolution view for temporal comparison (cube format)."""
 
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from apps.transect_viewer import config
-from apps.transect_viewer.utils.data_loader import get_common_transect_ids, get_transect_by_id
+from apps.transect_viewer.utils.data_loader import (
+    get_transect_by_id,
+    get_transect_temporal_slice,
+    compute_temporal_change,
+    get_cube_dimensions,
+    get_epoch_dates,
+    is_cube_format,
+    get_all_transect_ids,
+)
+from apps.transect_viewer.utils.validators import compute_temporal_statistics
 
 
 def render_evolution():
-    """Render the transect evolution view."""
+    """Render the transect evolution view for cube format data."""
+    if st.session_state.data is None:
+        st.warning("No data loaded")
+        return
+
+    data = st.session_state.data
+    is_cube = is_cube_format(data)
+    dims = get_cube_dimensions(data)
+
     st.header("Transect Evolution")
 
-    epochs = st.session_state.epochs
-
-    if len(epochs) < 2:
-        st.warning("Load at least 2 epochs to compare temporal evolution.")
+    if not is_cube:
+        st.warning("Temporal evolution requires cube format data.")
         st.info("""
-        **How to load multiple epochs:**
-        1. Use the sidebar's "Add epoch" file uploader
-        2. Each NPZ file should be from a different scan date
-        3. Transects are matched by ID across epochs
+        **Cube format data required:**
+        Your data appears to be in flat format (single epoch).
+        To view temporal evolution, load a cube format NPZ file
+        generated from multiple LiDAR scans.
         """)
-
-        # Show single epoch if available
-        if len(epochs) == 1:
-            st.subheader("Current Epoch")
-            date_key = list(epochs.keys())[0]
-            data = epochs[date_key]
-            st.write(f"- Date: {date_key}")
-            st.write(f"- Transects: {data['points'].shape[0]}")
-
         return
 
-    # Find common transects
-    common_ids = get_common_transect_ids(epochs)
-
-    if not common_ids:
-        st.error("No common transect IDs found across epochs")
+    if dims['n_epochs'] < 2:
+        st.warning("Temporal evolution requires at least 2 epochs.")
         return
 
-    st.success(f"Found {len(common_ids)} transects present in all {len(epochs)} epochs")
+    epoch_dates = get_epoch_dates(data)
+    transect_id = st.session_state.selected_transect_id
 
-    # Transect selector
-    selected_id = st.selectbox(
-        "Select Transect ID",
-        common_ids,
-        index=0,
-    )
+    # Info about temporal coverage
+    st.success(f"Cube data loaded: {dims['n_transects']} transects × {dims['n_epochs']} epochs")
+    if epoch_dates:
+        st.info(f"Date range: {epoch_dates[0][:10]} to {epoch_dates[-1][:10]}")
+
+    # Transect selector (moved from sidebar for better UX)
+    transect_ids = get_all_transect_ids(data)
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        transect_id = st.selectbox(
+            "Select Transect",
+            transect_ids,
+            index=transect_ids.index(transect_id) if transect_id in transect_ids else 0,
+            key="evolution_transect_selector",
+        )
+        st.session_state.selected_transect_id = transect_id
 
     # Feature selector
-    first_epoch = list(epochs.values())[0]
-    feature_names = first_epoch.get('feature_names', [])
+    feature_names = data.get('feature_names', [])
     if isinstance(feature_names, np.ndarray):
         feature_names = feature_names.tolist()
 
-    selected_feature = st.selectbox(
-        "Select Feature",
-        feature_names,
-        index=feature_names.index('elevation_m') if 'elevation_m' in feature_names else 0,
-    )
-
-    # Render comparison plot
-    _render_temporal_comparison(epochs, selected_id, selected_feature, feature_names)
+    with col2:
+        selected_feature = st.selectbox(
+            "Feature to Analyze",
+            feature_names,
+            index=feature_names.index('elevation_m') if 'elevation_m' in feature_names else 0,
+            key="evolution_feature_selector",
+        )
 
     st.markdown("---")
 
-    # Render difference plot
-    _render_difference_plot(epochs, selected_id, selected_feature, feature_names)
+    # Render temporal comparison
+    _render_temporal_comparison(data, transect_id, selected_feature, feature_names, epoch_dates)
+
+    st.markdown("---")
+
+    # Render change detection
+    _render_change_detection(data, transect_id, selected_feature, feature_names, epoch_dates)
+
+    st.markdown("---")
+
+    # Render temporal heatmap
+    _render_temporal_heatmap(data, transect_id, selected_feature, feature_names, epoch_dates)
 
 
 def _render_temporal_comparison(
-    epochs: dict,
+    data: dict,
     transect_id: int,
     feature_name: str,
-    feature_names: list
+    feature_names: list,
+    epoch_dates: list
 ):
-    """Render overlaid profiles from different epochs."""
-    st.subheader("Profile Comparison Across Epochs")
+    """Render overlaid profiles from all epochs."""
+    st.subheader("Profile Comparison Across All Epochs")
 
-    feature_idx = feature_names.index(feature_name)
+    try:
+        distances, values, dates = get_transect_temporal_slice(data, transect_id, feature_name)
+    except ValueError as e:
+        st.error(str(e))
+        return
+
+    n_epochs = values.shape[0]
 
     fig = go.Figure()
 
-    # Sort epochs by date
-    sorted_dates = sorted(epochs.keys())
+    for t in range(n_epochs):
+        epoch_label = dates[t][:10] if dates else f"Epoch {t}"
+        color = config.EPOCH_COLORS[t % len(config.EPOCH_COLORS)]
 
-    for i, date_key in enumerate(sorted_dates):
-        data = epochs[date_key]
-        transect = get_transect_by_id(data, transect_id)
-
-        color = config.EPOCH_COLORS[i % len(config.EPOCH_COLORS)]
+        # Skip if all NaN for this epoch
+        if np.all(np.isnan(values[t])):
+            continue
 
         fig.add_trace(go.Scatter(
-            x=transect['distances'],
-            y=transect['points'][:, feature_idx],
+            x=distances[t],
+            y=values[t],
             mode='lines',
-            name=date_key,
+            name=epoch_label,
             line=dict(color=color, width=2),
         ))
 
     unit = config.FEATURE_UNITS.get(feature_name, '')
     fig.update_layout(
-        title=f"{feature_name} Profile - Transect {transect_id}",
+        title=f"{feature_name} Profile Evolution - Transect {transect_id}",
         xaxis_title="Distance (m)",
         yaxis_title=f"{feature_name} ({unit})" if unit else feature_name,
         height=config.PLOT_HEIGHT,
@@ -118,47 +148,81 @@ def _render_temporal_comparison(
     st.plotly_chart(fig, use_container_width=True)
 
 
-def _render_difference_plot(
-    epochs: dict,
+def _render_change_detection(
+    data: dict,
     transect_id: int,
     feature_name: str,
-    feature_names: list
+    feature_names: list,
+    epoch_dates: list
 ):
-    """Render difference between first and last epoch."""
+    """Render difference between selected epochs."""
     st.subheader("Change Detection")
 
-    if len(epochs) < 2:
+    dims = get_cube_dimensions(data)
+
+    # Epoch selection for comparison
+    col1, col2 = st.columns(2)
+
+    epoch_options = [
+        f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
+        for i in range(dims['n_epochs'])
+    ]
+
+    with col1:
+        epoch1_idx = st.selectbox(
+            "First Epoch (baseline)",
+            range(dims['n_epochs']),
+            index=0,
+            format_func=lambda x: epoch_options[x],
+            key="change_epoch1",
+        )
+
+    with col2:
+        epoch2_idx = st.selectbox(
+            "Second Epoch (comparison)",
+            range(dims['n_epochs']),
+            index=dims['n_epochs'] - 1,
+            format_func=lambda x: epoch_options[x],
+            key="change_epoch2",
+        )
+
+    # Compute change
+    try:
+        change = compute_temporal_change(
+            data, transect_id, feature_name,
+            epoch1_idx=epoch1_idx, epoch2_idx=epoch2_idx
+        )
+    except Exception as e:
+        st.error(f"Error computing change: {e}")
         return
 
-    feature_idx = feature_names.index(feature_name)
-    sorted_dates = sorted(epochs.keys())
-
-    # Get first and last epoch
-    first_date = sorted_dates[0]
-    last_date = sorted_dates[-1]
-
-    first_transect = get_transect_by_id(epochs[first_date], transect_id)
-    last_transect = get_transect_by_id(epochs[last_date], transect_id)
-
-    # Compute difference
-    first_values = first_transect['points'][:, feature_idx]
-    last_values = last_transect['points'][:, feature_idx]
-    distances = first_transect['distances']
-
-    difference = last_values - first_values
-
-    # Create plot
+    # Plot difference
     fig = go.Figure()
 
-    # Fill positive/negative differently
+    # Fill positive/negative areas differently
+    difference = change['difference']
+    distances = change['distances']
+
+    # Positive changes (gain)
     fig.add_trace(go.Scatter(
         x=distances,
-        y=difference,
+        y=np.where(difference >= 0, difference, 0),
         mode='lines',
         fill='tozeroy',
-        name='Change',
-        line=dict(color='#3498db', width=2),
-        fillcolor='rgba(52, 152, 219, 0.3)',
+        name='Increase',
+        line=dict(color='#27ae60', width=1),
+        fillcolor='rgba(39, 174, 96, 0.3)',
+    ))
+
+    # Negative changes (loss)
+    fig.add_trace(go.Scatter(
+        x=distances,
+        y=np.where(difference < 0, difference, 0),
+        mode='lines',
+        fill='tozeroy',
+        name='Decrease',
+        line=dict(color='#e74c3c', width=1),
+        fillcolor='rgba(231, 76, 60, 0.3)',
     ))
 
     # Zero line
@@ -166,10 +230,10 @@ def _render_difference_plot(
 
     unit = config.FEATURE_UNITS.get(feature_name, '')
     fig.update_layout(
-        title=f"Change in {feature_name}: {last_date} - {first_date}",
+        title=f"Change in {feature_name}: {change['epoch2_date'][:10]} - {change['epoch1_date'][:10]}",
         xaxis_title="Distance (m)",
         yaxis_title=f"Δ {feature_name} ({unit})" if unit else f"Δ {feature_name}",
-        height=300,
+        height=350,
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -178,13 +242,74 @@ def _render_difference_plot(
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Mean Change", f"{np.nanmean(difference):.3f}")
+        st.metric("Mean Change", f"{change['mean_change']:.3f}")
 
     with col2:
-        st.metric("Max Increase", f"{np.nanmax(difference):.3f}")
+        st.metric("Max Increase", f"{change['max_change']:.3f}")
 
     with col3:
-        st.metric("Max Decrease", f"{np.nanmin(difference):.3f}")
+        st.metric("Max Decrease", f"{change['min_change']:.3f}")
 
     with col4:
-        st.metric("Std Dev", f"{np.nanstd(difference):.3f}")
+        st.metric("Std Dev", f"{change['std_change']:.3f}")
+
+
+def _render_temporal_heatmap(
+    data: dict,
+    transect_id: int,
+    feature_name: str,
+    feature_names: list,
+    epoch_dates: list
+):
+    """Render heatmap showing feature values over time and distance."""
+    st.subheader("Temporal Heatmap")
+
+    try:
+        distances, values, dates = get_transect_temporal_slice(data, transect_id, feature_name)
+    except ValueError as e:
+        st.error(str(e))
+        return
+
+    n_epochs = values.shape[0]
+    n_points = values.shape[1]
+
+    # Create distance labels (sample to avoid clutter)
+    sample_interval = max(1, n_points // 10)
+    dist_labels = [f"{distances[0, i]:.0f}" for i in range(0, n_points, sample_interval)]
+
+    # Epoch labels
+    epoch_labels = [d[:10] if dates else f"E{i}" for i, d in enumerate(dates)] if dates else [f"E{i}" for i in range(n_epochs)]
+
+    # Create heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=values,
+        x=list(range(n_points)),
+        y=epoch_labels,
+        colorscale='RdBu_r' if feature_name == 'elevation_m' else 'Viridis',
+        colorbar=dict(title=feature_name),
+    ))
+
+    fig.update_layout(
+        title=f"{feature_name} Evolution Heatmap - Transect {transect_id}",
+        xaxis_title="Point Index (distance →)",
+        yaxis_title="Epoch",
+        height=300 + n_epochs * 20,
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Temporal statistics
+    with st.expander("Show Temporal Statistics", expanded=False):
+        try:
+            stats_df = compute_temporal_statistics(data, feature_name)
+            st.dataframe(
+                stats_df.style.format({
+                    'min': '{:.3f}',
+                    'max': '{:.3f}',
+                    'mean': '{:.3f}',
+                    'std': '{:.3f}',
+                }),
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error(f"Could not compute temporal statistics: {e}")

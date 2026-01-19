@@ -277,6 +277,13 @@ def main():
     )
 
     parser.add_argument(
+        '-n', '--limit',
+        type=int,
+        default=None,
+        help='Limit to first N files (useful for testing, e.g. -n 4)'
+    )
+
+    parser.add_argument(
         '--target-os',
         type=str,
         choices=['mac', 'linux'],
@@ -360,8 +367,13 @@ def main():
     else:
         las_paths = las_paths[args.start:]
 
+    # Apply limit (-n) if specified
+    if args.limit is not None:
+        las_paths = las_paths[:args.limit]
+        print(f"Limited to first {args.limit} files (-n/--limit)")
+
     if len(las_paths) != original_count:
-        print(f"Processing files {args.start} to {args.start + len(las_paths)} of {original_count}")
+        print(f"Processing {len(las_paths)} of {original_count} files")
 
     # Build conversion list
     conversions: List[Tuple[Path, Path]] = []

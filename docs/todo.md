@@ -9,6 +9,37 @@
 - [x] Date parsing from LAS filenames
 - [x] Canonical beach/MOP range definitions
 
+### Phase 2: Model Implementation (COMPLETE)
+- [x] SpatioTemporalTransectEncoder (spatial then temporal attention)
+  - Distance-based sinusoidal positional encoding
+  - Learned temporal positional encoding
+  - Metadata embedding and broadcasting
+  - CLS token pooling
+  - 28 tests passing
+- [x] EnvironmentalEncoder for wave/atmospheric data
+  - Shared architecture for time series
+  - Day-of-year seasonality embedding
+  - Padding mask support
+  - WaveEncoder and AtmosphericEncoder wrappers
+  - 37 tests passing
+- [x] CrossAttentionFusion module
+  - Multi-layer cross-attention (cliff queries environment)
+  - Attention weight extraction for interpretability
+  - Padding mask support
+  - 25 tests passing
+- [x] PredictionHeads (all four heads implemented)
+  - RiskIndexHead: Sigmoid output [0,1]
+  - ExpectedRetreatHead: Softplus for positive values
+  - CollapseProbabilityHead: Multi-label 4 horizons
+  - FailureModeHead: Multi-class 5 modes
+  - Selective enabling for phased training
+  - 35 tests passing
+- [x] CliffCast main model
+  - Full end-to-end model assembly
+  - Flexible configuration
+  - Attention extraction methods
+  - 26 tests passing
+
 ### Transect Viewer (COMPLETE)
 - [x] Data Dashboard with temporal coverage stats
 - [x] Single Transect Inspector with epoch selection
@@ -17,11 +48,16 @@
 - [x] Cross-Transect View with spatial analysis
 - [x] String transect ID support (MOP names like "MOP 595")
 
-### Test Suite (65 tests passing)
+### Test Suite (216 tests passing)
 - [x] test_transect_extractor.py - 30 tests for extraction + cube format + subsetting + paths
 - [x] test_transect_viewer.py - 27 tests for data_loader + validators
 - [x] test_utils.py - 8 tests for config utilities
-- [x] Fixed config override handling (dot-notation)
+- [x] test_transect_encoder.py - 28 tests for spatio-temporal encoder
+- [x] test_environmental_encoder.py - 37 tests for environmental encoders
+- [x] test_fusion.py - 25 tests for cross-attention fusion
+- [x] test_prediction_heads.py - 35 tests for prediction heads
+- [x] test_cliffcast.py - 26 tests for full model
+- [x] **100% code coverage** for all model components
 
 ### Subset Utility
 - [x] `scripts/processing/subset_transects.py` for filtering NPZ by MOP range
@@ -40,27 +76,65 @@
 - [ ] Process all beaches through extraction pipeline
 - [ ] Validate cube files with transect viewer
 - [ ] Generate per-beach NPZ files (recommend <500MB each)
+- [ ] Download wave data (CDIP MOP system)
+- [ ] Process atmospheric data (PRISM + computed features)
 
 ## Next Steps
 
-### Phase 2: Model Implementation
-- [ ] SpatioTemporalTransectEncoder (spatial then temporal attention)
-- [ ] EnvironmentalEncoder for wave/precip data
-- [ ] CrossAttentionFusion module
-- [ ] Risk Index prediction head (first head to validate architecture)
-
 ### Phase 3: Training Infrastructure
 - [ ] Dataset class for cube format data
+  - Load transect NPZ files
+  - Integrate wave loader (CDIP)
+  - Integrate atmospheric loader
+  - Handle temporal alignment
+  - Batch collation with padding
 - [ ] Loss functions (CliffCastLoss)
+  - Risk Index: Smooth L1 loss (weight=1.0)
+  - Expected Retreat: Smooth L1 loss (weight=1.0)
+  - Collapse Probability: Binary cross-entropy (weight=2.0)
+  - Failure Mode: Cross-entropy (weight=0.5, only on failures)
+  - Combined weighted loss
 - [ ] Training loop with W&B logging
+  - Optimizer (AdamW) + scheduler (cosine)
+  - Gradient clipping
+  - Mixed precision training (AMP)
+  - Checkpointing (save top-k)
+  - Early stopping
 - [ ] Validation on synthetic data
+  - Generate synthetic transects with known relationships
+  - Verify model learns expected patterns
+  - Debug training on small scale
+
+### Phase 4: Evaluation & Metrics
+- [ ] Evaluation metrics
+  - Risk Index: R², MAE, RMSE
+  - Collapse Probability: AUC-ROC, precision-recall, calibration (ECE)
+  - Expected Retreat: MAE, RMSE
+  - Failure Mode: Accuracy, confusion matrix, per-class F1
+- [ ] Baseline comparisons
+  - Linear regression baseline
+  - Random forest baseline
+  - Simple MLP baseline
+- [ ] Attention visualization tools
+  - Spatial attention heatmaps on cliff profiles
+  - Temporal attention over LiDAR epochs
+  - Environmental attention over storms/events
+  - Interactive visualization app
 
 ## Backlog
 
-### Future Enhancements
-- [ ] Wave data downloader and preprocessor
-- [ ] Precipitation data downloader and preprocessor
-- [ ] Additional prediction heads (retreat, collapse, failure mode)
-- [ ] Attention visualization tools
-- [ ] 3D context enhancement (Option C)
+### Phase 5: Production Deployment
+- [ ] Batch inference pipeline for state-wide predictions
+- [ ] Model serving API
+- [ ] Uncertainty quantification
+- [ ] Model interpretation dashboard
 - [ ] Transfer learning to other coastlines
+- [ ] 3D context enhancement (Option C)
+
+### Data Enhancements
+- [ ] Additional environmental features
+  - Sea level data
+  - Storm surge predictions
+  - Groundwater levels
+- [ ] Multi-scale modeling (cliff + beach + regional)
+- [ ] Incorporate historical failure data

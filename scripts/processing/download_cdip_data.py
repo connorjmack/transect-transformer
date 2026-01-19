@@ -156,6 +156,22 @@ def try_multiple_site_labels(
     return False, None
 
 
+class SuppressStderr:
+    """Context manager to suppress stderr at the file descriptor level.
+
+    This is needed to suppress HDF5 error messages which are printed from C code.
+    """
+    def __enter__(self):
+        self.null_fd = os.open(os.devnull, os.O_RDWR)
+        self.save_fd = os.dup(2)
+        os.dup2(self.null_fd, 2)
+
+    def __exit__(self, *_):
+        os.dup2(self.save_fd, 2)
+        os.close(self.null_fd)
+        os.close(self.save_fd)
+
+
 def download_single_mop(
     mop_id: int,
     output_dir: Path,
@@ -175,9 +191,6 @@ def download_single_mop(
     Returns:
         Tuple of (mop_id, success: bool, error_message: Optional[str])
     """
-    import contextlib
-    import io
-
     # Check if file already exists
     possible_files = [
         output_dir / f"D{mop_id:04d}_hindcast.nc",
@@ -195,8 +208,8 @@ def download_single_mop(
     loader = CDIPWaveLoader(cache_dir=output_dir)
 
     # Try to download with multiple site label formats
-    # Suppress stderr to hide HDF5 error messages
-    with contextlib.redirect_stderr(io.StringIO()):
+    # Suppress stderr to hide HDF5 error messages (C-level suppression)
+    with SuppressStderr():
         success, site_label = try_multiple_site_labels(
             loader, mop_id, start_date, end_date
         )

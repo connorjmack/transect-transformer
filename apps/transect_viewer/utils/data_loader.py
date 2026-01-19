@@ -1,31 +1,33 @@
-"""Data loading utilities with Streamlit caching."""
+"""Data loading utilities with Streamlit caching for CUBE FORMAT data.
 
+Cube format arrays:
+- points: (n_transects, T, N, 12) - point features across all epochs
+- distances: (n_transects, T, N) - distance along transect
+- metadata: (n_transects, T, 12) - per-epoch metadata
+- timestamps: (n_transects, T) - scan dates as ordinal days
+- transect_ids: (n_transects,) - unique transect IDs
+- epoch_names: (T,) - LAS filenames for each epoch
+- epoch_dates: (T,) - ISO date strings for each epoch
+"""
+
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 import streamlit as st
-
-from apps.transect_viewer.utils.date_parser import infer_epoch_date
 
 
 @st.cache_data
 def load_npz(file_path: str) -> dict[str, Any]:
     """
-    Load NPZ file with Streamlit caching.
+    Load NPZ file with Streamlit caching (cube format).
 
     Args:
         file_path: Path to NPZ file
 
     Returns:
-        Dictionary with numpy arrays:
-        - points: (N, 128, 12) transect point features
-        - distances: (N, 128) distances along transect
-        - metadata: (N, 12) transect-level metadata
-        - transect_ids: (N,) unique transect IDs
-        - las_sources: (N,) source LAS filenames
-        - feature_names: list of 12 feature names
-        - metadata_names: list of 12 metadata names
+        Dictionary with numpy arrays in cube format
     """
     data = np.load(file_path, allow_pickle=True)
 
@@ -44,13 +46,13 @@ def load_npz(file_path: str) -> dict[str, Any]:
 
 def load_npz_from_upload(uploaded_file) -> dict[str, Any]:
     """
-    Load NPZ file from Streamlit file uploader.
+    Load NPZ file from Streamlit file uploader (cube format).
 
     Args:
         uploaded_file: Streamlit UploadedFile object
 
     Returns:
-        Dictionary with numpy arrays (same structure as load_npz)
+        Dictionary with numpy arrays in cube format
     """
     data = np.load(uploaded_file, allow_pickle=True)
 
@@ -65,52 +67,71 @@ def load_npz_from_upload(uploaded_file) -> dict[str, Any]:
     return result
 
 
-@st.cache_data
-def load_multiple_epochs(file_paths: list[str]) -> dict[str, dict[str, Any]]:
-    """
-    Load multiple NPZ files, keyed by extracted date.
+def is_cube_format(data: dict[str, Any]) -> bool:
+    """Check if data is in cube format (4D points array)."""
+    points = data.get('points')
+    if points is None:
+        return False
+    return points.ndim == 4
 
-    Args:
-        file_paths: List of paths to NPZ files
+
+def get_cube_dimensions(data: dict[str, Any]) -> dict[str, int]:
+    """
+    Get dimensions of cube format data.
 
     Returns:
-        Dictionary mapping date strings to data dicts
+        Dictionary with n_transects, n_epochs, n_points, n_features
     """
-    epochs = {}
+    points = data['points']
+    if points.ndim == 4:
+        n_transects, n_epochs, n_points, n_features = points.shape
+    else:
+        # Flat format fallback
+        n_transects, n_points, n_features = points.shape
+        n_epochs = 1
 
-    for path in file_paths:
-        data = load_npz(path)
-
-        # Extract date from las_sources
-        date = infer_epoch_date(data.get('las_sources', []))
-        if date:
-            date_key = date.strftime('%Y-%m-%d')
-        else:
-            # Fallback to filename
-            date_key = Path(path).stem
-
-        epochs[date_key] = data
-
-    return epochs
+    return {
+        'n_transects': n_transects,
+        'n_epochs': n_epochs,
+        'n_points': n_points,
+        'n_features': n_features,
+    }
 
 
-def get_transect_by_id(data: dict[str, Any], transect_id: int) -> dict[str, Any]:
+def get_epoch_dates(data: dict[str, Any]) -> list[str]:
+    """Get list of epoch date strings."""
+    epoch_dates = data.get('epoch_dates', [])
+    if isinstance(epoch_dates, np.ndarray):
+        epoch_dates = epoch_dates.tolist()
+    return epoch_dates
+
+
+def get_epoch_names(data: dict[str, Any]) -> list[str]:
+    """Get list of epoch filenames."""
+    epoch_names = data.get('epoch_names', [])
+    if isinstance(epoch_names, np.ndarray):
+        epoch_names = epoch_names.tolist()
+    return epoch_names
+
+
+def get_transect_by_id(
+    data: dict[str, Any],
+    transect_id: int,
+    epoch_idx: Optional[int] = None
+) -> dict[str, Any]:
     """
     Extract single transect data by ID.
 
     Args:
-        data: Full dataset from load_npz
+        data: Full dataset in cube format
         transect_id: Transect ID to extract
+        epoch_idx: Optional epoch index. If None, returns all epochs.
 
     Returns:
-        Dictionary with single transect data:
-        - points: (128, 12) features
-        - distances: (128,) distances
-        - metadata: (12,) metadata
-        - transect_id: int
-        - las_source: str
+        Dictionary with transect data:
+        - If epoch_idx is None: full temporal data (T, N, 12)
+        - If epoch_idx is int: single epoch data (N, 12)
     """
-    # Find index for this transect ID
     transect_ids = data['transect_ids']
     if isinstance(transect_ids, list):
         transect_ids = np.array(transect_ids)
@@ -120,44 +141,71 @@ def get_transect_by_id(data: dict[str, Any], transect_id: int) -> dict[str, Any]
         raise ValueError(f"Transect ID {transect_id} not found")
     idx = idx[0]
 
-    las_sources = data['las_sources']
+    points = data['points']
+    distances = data['distances']
+    metadata = data['metadata']
 
-    return {
-        'points': data['points'][idx],
-        'distances': data['distances'][idx],
-        'metadata': data['metadata'][idx],
-        'transect_id': transect_id,
-        'las_source': las_sources[idx] if isinstance(las_sources, list) else las_sources[idx],
-        'feature_names': data.get('feature_names', []),
-        'metadata_names': data.get('metadata_names', []),
-    }
+    if epoch_idx is not None:
+        # Single epoch
+        return {
+            'points': points[idx, epoch_idx],  # (N, 12)
+            'distances': distances[idx, epoch_idx],  # (N,)
+            'metadata': metadata[idx, epoch_idx],  # (12,)
+            'transect_id': transect_id,
+            'epoch_idx': epoch_idx,
+            'epoch_date': get_epoch_dates(data)[epoch_idx] if get_epoch_dates(data) else None,
+            'feature_names': data.get('feature_names', []),
+            'metadata_names': data.get('metadata_names', []),
+        }
+    else:
+        # All epochs
+        return {
+            'points': points[idx],  # (T, N, 12)
+            'distances': distances[idx],  # (T, N)
+            'metadata': metadata[idx],  # (T, 12)
+            'transect_id': transect_id,
+            'epoch_dates': get_epoch_dates(data),
+            'epoch_names': get_epoch_names(data),
+            'feature_names': data.get('feature_names', []),
+            'metadata_names': data.get('metadata_names', []),
+        }
 
 
-def get_feature_by_name(
+def get_transect_temporal_slice(
     data: dict[str, Any],
-    transect_idx: int,
+    transect_id: int,
     feature_name: str
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """
-    Get a specific feature array for a transect.
+    Get temporal evolution of a feature for a transect.
 
     Args:
-        data: Full dataset from load_npz
-        transect_idx: Index of transect (not ID)
+        data: Full dataset in cube format
+        transect_id: Transect ID
         feature_name: Name of feature to extract
 
     Returns:
-        (128,) array of feature values
+        Tuple of (distances, values, epoch_dates)
+        - distances: (T, N) array
+        - values: (T, N) array of feature values
+        - epoch_dates: list of date strings
     """
-    feature_names = data.get('feature_names', [])
+    transect = get_transect_by_id(data, transect_id)
+
+    feature_names = transect.get('feature_names', [])
     if isinstance(feature_names, np.ndarray):
         feature_names = feature_names.tolist()
 
     if feature_name not in feature_names:
-        raise ValueError(f"Feature '{feature_name}' not found. Available: {feature_names}")
+        raise ValueError(f"Feature '{feature_name}' not found")
 
     feature_idx = feature_names.index(feature_name)
-    return data['points'][transect_idx, :, feature_idx]
+
+    return (
+        transect['distances'],  # (T, N)
+        transect['points'][:, :, feature_idx],  # (T, N)
+        transect['epoch_dates'],
+    )
 
 
 def get_all_transect_ids(data: dict[str, Any]) -> list[int]:
@@ -168,31 +216,120 @@ def get_all_transect_ids(data: dict[str, Any]) -> list[int]:
     return sorted(transect_ids.tolist())
 
 
-def get_common_transect_ids(epochs: dict[str, dict[str, Any]]) -> list[int]:
+def get_epoch_slice(
+    data: dict[str, Any],
+    epoch_idx: int
+) -> dict[str, Any]:
     """
-    Find transect IDs present in all epochs.
+    Get all transects for a single epoch.
 
     Args:
-        epochs: Dictionary of epoch data from load_multiple_epochs
+        data: Full dataset in cube format
+        epoch_idx: Epoch index
 
     Returns:
-        Sorted list of transect IDs present in all epochs
+        Dictionary with single-epoch data:
+        - points: (n_transects, N, 12)
+        - distances: (n_transects, N)
+        - metadata: (n_transects, 12)
     """
-    if not epochs:
-        return []
+    return {
+        'points': data['points'][:, epoch_idx],
+        'distances': data['distances'][:, epoch_idx],
+        'metadata': data['metadata'][:, epoch_idx],
+        'transect_ids': data['transect_ids'],
+        'epoch_idx': epoch_idx,
+        'epoch_date': get_epoch_dates(data)[epoch_idx] if get_epoch_dates(data) else None,
+        'epoch_name': get_epoch_names(data)[epoch_idx] if get_epoch_names(data) else None,
+        'feature_names': data.get('feature_names', []),
+        'metadata_names': data.get('metadata_names', []),
+    }
 
-    # Get sets of IDs from each epoch
-    id_sets = []
-    for epoch_data in epochs.values():
-        ids = epoch_data['transect_ids']
-        if isinstance(ids, list):
-            id_sets.append(set(ids))
-        else:
-            id_sets.append(set(ids.tolist()))
 
-    # Find intersection
-    common_ids = id_sets[0]
-    for id_set in id_sets[1:]:
-        common_ids = common_ids.intersection(id_set)
+def compute_temporal_change(
+    data: dict[str, Any],
+    transect_id: int,
+    feature_name: str,
+    epoch1_idx: int = 0,
+    epoch2_idx: int = -1
+) -> dict[str, Any]:
+    """
+    Compute change in a feature between two epochs.
 
-    return sorted(list(common_ids))
+    Args:
+        data: Full dataset in cube format
+        transect_id: Transect ID
+        feature_name: Feature to compare
+        epoch1_idx: First epoch index (default: 0, earliest)
+        epoch2_idx: Second epoch index (default: -1, latest)
+
+    Returns:
+        Dictionary with change data
+    """
+    transect = get_transect_by_id(data, transect_id)
+
+    feature_names = transect.get('feature_names', [])
+    if isinstance(feature_names, np.ndarray):
+        feature_names = feature_names.tolist()
+
+    feature_idx = feature_names.index(feature_name)
+
+    n_epochs = transect['points'].shape[0]
+    if epoch2_idx < 0:
+        epoch2_idx = n_epochs + epoch2_idx
+
+    values1 = transect['points'][epoch1_idx, :, feature_idx]
+    values2 = transect['points'][epoch2_idx, :, feature_idx]
+    distances = transect['distances'][epoch2_idx]
+
+    difference = values2 - values1
+
+    epoch_dates = transect.get('epoch_dates', [])
+
+    return {
+        'distances': distances,
+        'values1': values1,
+        'values2': values2,
+        'difference': difference,
+        'epoch1_date': epoch_dates[epoch1_idx] if epoch_dates else f"Epoch {epoch1_idx}",
+        'epoch2_date': epoch_dates[epoch2_idx] if epoch_dates else f"Epoch {epoch2_idx}",
+        'mean_change': float(np.nanmean(difference)),
+        'max_change': float(np.nanmax(difference)),
+        'min_change': float(np.nanmin(difference)),
+        'std_change': float(np.nanstd(difference)),
+    }
+
+
+def check_data_coverage(data: dict[str, Any]) -> dict[str, Any]:
+    """
+    Check data coverage across transects and epochs.
+
+    Returns:
+        Dictionary with coverage statistics
+    """
+    points = data['points']
+    n_transects, n_epochs, n_points, _ = points.shape
+
+    # Check for NaN at first point of each transect-epoch
+    coverage_matrix = ~np.isnan(points[:, :, 0, 0])  # (n_transects, n_epochs)
+
+    total_cells = n_transects * n_epochs
+    present_cells = coverage_matrix.sum()
+    missing_cells = total_cells - present_cells
+
+    # Coverage per epoch
+    coverage_per_epoch = coverage_matrix.sum(axis=0)  # (n_epochs,)
+
+    # Coverage per transect
+    coverage_per_transect = coverage_matrix.sum(axis=1)  # (n_transects,)
+
+    return {
+        'total_cells': total_cells,
+        'present_cells': int(present_cells),
+        'missing_cells': int(missing_cells),
+        'coverage_pct': 100 * present_cells / total_cells,
+        'coverage_matrix': coverage_matrix,
+        'coverage_per_epoch': coverage_per_epoch,
+        'coverage_per_transect': coverage_per_transect,
+        'full_coverage': missing_cells == 0,
+    }

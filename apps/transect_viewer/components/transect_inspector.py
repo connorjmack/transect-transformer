@@ -6,7 +6,13 @@ from plotly.subplots import make_subplots
 import streamlit as st
 
 from apps.transect_viewer import config
-from apps.transect_viewer.utils.data_loader import get_transect_by_id, get_all_transect_ids
+from apps.transect_viewer.utils.data_loader import (
+    get_transect_by_id,
+    get_all_transect_ids,
+    get_cube_dimensions,
+    get_epoch_dates,
+    is_cube_format,
+)
 
 
 def render_inspector():
@@ -17,6 +23,11 @@ def render_inspector():
 
     data = st.session_state.data
     transect_id = st.session_state.selected_transect_id
+    epoch_idx = st.session_state.get('selected_epoch_idx', -1)
+
+    dims = get_cube_dimensions(data)
+    is_cube = is_cube_format(data)
+    epoch_dates = get_epoch_dates(data)
 
     if transect_id is None:
         transect_ids = get_all_transect_ids(data)
@@ -28,7 +39,13 @@ def render_inspector():
             return
 
     # Header with navigation
-    st.header(f"Transect Inspector: ID {transect_id}")
+    epoch_label = ""
+    if is_cube and epoch_dates:
+        epoch_label = f" - {epoch_dates[epoch_idx][:10]}"
+    elif is_cube:
+        epoch_label = f" - Epoch {epoch_idx}"
+
+    st.header(f"Transect Inspector: ID {transect_id}{epoch_label}")
 
     # Navigation buttons
     transect_ids = get_all_transect_ids(data)
@@ -46,15 +63,15 @@ def render_inspector():
             st.session_state.selected_transect_id = transect_ids[current_idx + 1]
             st.rerun()
 
-    # Get transect data
+    # Get transect data for specific epoch
     try:
-        transect = get_transect_by_id(data, transect_id)
+        transect = get_transect_by_id(data, transect_id, epoch_idx=epoch_idx)
     except ValueError as e:
         st.error(str(e))
         return
 
     # Metadata summary
-    _render_metadata_summary(transect)
+    _render_metadata_summary(transect, is_cube, epoch_dates, epoch_idx)
 
     st.markdown("---")
 
@@ -67,7 +84,7 @@ def render_inspector():
     _render_rgb_visualization(transect)
 
 
-def _render_metadata_summary(transect: dict):
+def _render_metadata_summary(transect: dict, is_cube: bool, epoch_dates: list, epoch_idx: int):
     """Render metadata summary card."""
     st.subheader("Transect Metadata")
 
@@ -97,7 +114,10 @@ def _render_metadata_summary(transect: dict):
 
     with col4:
         st.metric("Length", f"{metadata[6]:.1f} m")
-        st.metric("LAS Source", transect.get('las_source', 'N/A')[:20] + "...")
+        if is_cube and epoch_dates:
+            st.metric("Epoch Date", epoch_dates[epoch_idx][:10])
+        else:
+            st.metric("Transect ID", transect.get('transect_id', 'N/A'))
 
 
 def _render_feature_plots(transect: dict):
@@ -249,9 +269,9 @@ def _render_rgb_visualization(transect: dict):
     n_points = len(r)
     colors = []
     for i in range(n_points):
-        ri = int(np.clip(r[i] * 255, 0, 255))
-        gi = int(np.clip(g[i] * 255, 0, 255))
-        bi = int(np.clip(b[i] * 255, 0, 255))
+        ri = int(np.clip(r[i] * 255, 0, 255)) if not np.isnan(r[i]) else 128
+        gi = int(np.clip(g[i] * 255, 0, 255)) if not np.isnan(g[i]) else 128
+        bi = int(np.clip(b[i] * 255, 0, 255)) if not np.isnan(b[i]) else 128
         colors.append(f'rgb({ri},{gi},{bi})')
 
     # Create heatmap-style color bar

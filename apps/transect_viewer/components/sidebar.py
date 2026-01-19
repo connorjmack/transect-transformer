@@ -5,8 +5,14 @@ from pathlib import Path
 import streamlit as st
 
 from apps.transect_viewer import config
-from apps.transect_viewer.utils.data_loader import load_npz, load_npz_from_upload, get_all_transect_ids
-from apps.transect_viewer.utils.date_parser import infer_epoch_date, format_date_for_display
+from apps.transect_viewer.utils.data_loader import (
+    load_npz,
+    load_npz_from_upload,
+    get_all_transect_ids,
+    get_cube_dimensions,
+    get_epoch_dates,
+    is_cube_format,
+)
 
 
 def render_sidebar() -> str:
@@ -88,13 +94,9 @@ def _load_from_path(file_path: str):
             if transect_ids:
                 st.session_state.selected_transect_id = transect_ids[0]
 
-            # Add to epochs dict
-            epoch_date = infer_epoch_date(data.get('las_sources', []))
-            if epoch_date:
-                date_key = epoch_date.strftime('%Y-%m-%d')
-            else:
-                date_key = path.stem
-            st.session_state.epochs[date_key] = data
+            # Set default epoch index (latest)
+            dims = get_cube_dimensions(data)
+            st.session_state.selected_epoch_idx = dims['n_epochs'] - 1
 
         st.sidebar.success(f"Loaded: {path.name}")
     except Exception as e:
@@ -114,13 +116,9 @@ def _load_from_upload(uploaded_file):
             if transect_ids:
                 st.session_state.selected_transect_id = transect_ids[0]
 
-            # Add to epochs dict
-            epoch_date = infer_epoch_date(data.get('las_sources', []))
-            if epoch_date:
-                date_key = epoch_date.strftime('%Y-%m-%d')
-            else:
-                date_key = Path(uploaded_file.name).stem
-            st.session_state.epochs[date_key] = data
+            # Set default epoch index (latest)
+            dims = get_cube_dimensions(data)
+            st.session_state.selected_epoch_idx = dims['n_epochs'] - 1
 
         st.sidebar.success(f"Loaded: {uploaded_file.name}")
     except Exception as e:
@@ -130,10 +128,10 @@ def _load_from_upload(uploaded_file):
 def _clear_data():
     """Clear all loaded data."""
     st.session_state.data = None
-    st.session_state.epochs = {}
     st.session_state.selected_transect_id = None
     st.session_state.selected_transects = []
     st.session_state.current_file = None
+    st.session_state.selected_epoch_idx = 0
     st.rerun()
 
 
@@ -148,24 +146,27 @@ def _render_data_info():
     st.sidebar.markdown("---")
     st.sidebar.subheader("Loaded Data")
 
-    # Basic stats
-    n_transects = data['points'].shape[0]
-    n_points = data['points'].shape[1]
-    n_features = data['points'].shape[2]
+    # Get cube dimensions
+    dims = get_cube_dimensions(data)
+    is_cube = is_cube_format(data)
 
-    st.sidebar.metric("Transects", n_transects)
-    st.sidebar.metric("Points/Transect", n_points)
-    st.sidebar.metric("Features", n_features)
+    st.sidebar.metric("Transects", dims['n_transects'])
+    st.sidebar.metric("Points/Transect", dims['n_points'])
+    st.sidebar.metric("Features", dims['n_features'])
 
-    # Epoch date
-    epoch_date = infer_epoch_date(data.get('las_sources', []))
-    st.sidebar.metric("Epoch Date", format_date_for_display(epoch_date))
+    # Show temporal info for cube format
+    if is_cube:
+        st.sidebar.metric("Temporal Epochs", dims['n_epochs'])
 
-    # Loaded epochs
-    if len(st.session_state.epochs) > 1:
-        st.sidebar.markdown(f"**Epochs loaded:** {len(st.session_state.epochs)}")
-        for date_key in sorted(st.session_state.epochs.keys()):
-            st.sidebar.text(f"  - {date_key}")
+        # Show epoch dates
+        epoch_dates = get_epoch_dates(data)
+        if epoch_dates:
+            st.sidebar.markdown("**Epoch Dates:**")
+            for i, date in enumerate(epoch_dates):
+                date_str = date[:10] if len(date) >= 10 else date
+                st.sidebar.text(f"  {i}: {date_str}")
+    else:
+        st.sidebar.info("Flat format (single epoch)")
 
 
 def _render_view_options(view_mode: str):
@@ -177,6 +178,8 @@ def _render_view_options(view_mode: str):
     st.sidebar.subheader("View Options")
 
     data = st.session_state.data
+    dims = get_cube_dimensions(data)
+    is_cube = is_cube_format(data)
 
     if view_mode == "Single Transect Inspector":
         # Transect selector
@@ -191,6 +194,22 @@ def _render_view_options(view_mode: str):
         )
         st.session_state.selected_transect_id = selected_id
 
+        # Epoch selector (for cube format)
+        if is_cube and dims['n_epochs'] > 1:
+            epoch_dates = get_epoch_dates(data)
+            epoch_options = [
+                f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
+                for i in range(dims['n_epochs'])
+            ]
+
+            selected_epoch = st.sidebar.selectbox(
+                "Epoch",
+                range(dims['n_epochs']),
+                index=st.session_state.selected_epoch_idx,
+                format_func=lambda x: epoch_options[x],
+            )
+            st.session_state.selected_epoch_idx = selected_epoch
+
         # Feature selector
         feature_names = data.get('feature_names', [])
         if isinstance(feature_names, list) and feature_names:
@@ -204,17 +223,40 @@ def _render_view_options(view_mode: str):
             st.session_state.selected_feature = selected_feature
 
     elif view_mode == "Transect Evolution":
-        # Multi-file loading for evolution view
-        st.sidebar.markdown("**Load additional epochs:**")
-        additional_file = st.sidebar.file_uploader(
-            "Add epoch",
-            type=["npz"],
-            key="evolution_uploader",
+        # Transect selector for evolution view
+        transect_ids = get_all_transect_ids(data)
+
+        selected_id = st.sidebar.selectbox(
+            "Transect ID",
+            transect_ids,
+            index=transect_ids.index(st.session_state.selected_transect_id)
+            if st.session_state.selected_transect_id in transect_ids
+            else 0,
+            key="evolution_transect_id",
         )
-        if additional_file is not None:
-            _load_additional_epoch(additional_file)
+        st.session_state.selected_transect_id = selected_id
+
+        if not is_cube or dims['n_epochs'] < 2:
+            st.sidebar.warning("Temporal data requires cube format with multiple epochs")
 
     elif view_mode == "Cross-Transect View":
+        # Epoch selector for cross-transect view
+        if is_cube and dims['n_epochs'] > 1:
+            epoch_dates = get_epoch_dates(data)
+            epoch_options = [
+                f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
+                for i in range(dims['n_epochs'])
+            ]
+
+            selected_epoch = st.sidebar.selectbox(
+                "Epoch to Display",
+                range(dims['n_epochs']),
+                index=st.session_state.selected_epoch_idx,
+                format_func=lambda x: epoch_options[x],
+                key="cross_transect_epoch",
+            )
+            st.session_state.selected_epoch_idx = selected_epoch
+
         # Metadata field selector for map coloring
         metadata_names = data.get('metadata_names', [])
         if isinstance(metadata_names, list) and metadata_names:
@@ -224,30 +266,3 @@ def _render_view_options(view_mode: str):
                 index=0,
                 key="map_color_field",
             )
-
-
-def _load_additional_epoch(uploaded_file):
-    """Load additional epoch file."""
-    file_key = uploaded_file.name
-
-    # Check if already loaded
-    for date_key in st.session_state.epochs:
-        if file_key in date_key or date_key in file_key:
-            return
-
-    try:
-        data = load_npz_from_upload(uploaded_file)
-
-        # Add to epochs dict
-        epoch_date = infer_epoch_date(data.get('las_sources', []))
-        if epoch_date:
-            date_key = epoch_date.strftime('%Y-%m-%d')
-        else:
-            date_key = Path(uploaded_file.name).stem
-
-        if date_key not in st.session_state.epochs:
-            st.session_state.epochs[date_key] = data
-            st.sidebar.success(f"Added epoch: {date_key}")
-
-    except Exception as e:
-        st.sidebar.error(f"Error loading epoch: {e}")

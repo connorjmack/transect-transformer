@@ -172,32 +172,58 @@ def calculate_optimal_rotation(gdf: gpd.GeoDataFrame) -> float:
     return rotation
 
 
-def add_north_arrow(ax: plt.Axes, rotation_angle: float, xy=(0.08, 0.92)) -> None:
-    """Draw a publication-quality North arrow pointing to True North."""
+def add_north_arrow(ax: plt.Axes, rotation_angle: float, xy=(0.06, 0.90)) -> None:
+    """Draw a traditional compass-style North arrow pointing to True North."""
     arrow_angle_deg = 90 + rotation_angle
     arrow_angle_rad = np.radians(arrow_angle_deg)
-    
-    cx, cy = xy
-    size = 0.04
-    width = size * 0.6
-    
-    cos_a = np.cos(arrow_angle_rad)
-    sin_a = np.sin(arrow_angle_rad)
-    
-    def transform(u, v):
-        aspect_ratio = 12 / 7
-        return (cx + rx / aspect_ratio, cy + ry) if 'rx' in locals() else (cx + (u * cos_a - v * sin_a) / aspect_ratio, cy + (u * sin_a + v * cos_a))
 
-    tip = transform(size, 0)
-    tail_center = transform(-size * 0.2, 0)
-    wing_left = transform(-size * 0.1, width)
-    wing_right = transform(-size * 0.1, -width)
-    
-    ax.add_patch(plt.Polygon([tip, tail_center, wing_left], transform=ax.transAxes, facecolor="black", edgecolor="black", linewidth=1, zorder=20))
-    ax.add_patch(plt.Polygon([tip, tail_center, wing_right], transform=ax.transAxes, facecolor="white", edgecolor="black", linewidth=1, zorder=20))
-    
-    label_pos = transform(size + 0.03, 0)
-    ax.text(label_pos[0], label_pos[1], "N", ha="center", va="center", transform=ax.transAxes, fontsize=14, fontweight="bold", color="black", zorder=20).set_path_effects([pe.withStroke(linewidth=3, foreground="white", alpha=0.8)])
+    cx, cy = xy
+    size = 0.05  # arrow size in axes coordinates
+    width = 0.015  # arrow width
+
+    # Adjust for figure aspect ratio
+    aspect_ratio = 12 / 6  # figsize width/height
+
+    def transform(u, v):
+        """Transform local arrow coords to axes coords, accounting for rotation and aspect."""
+        # Rotate the point
+        rx = u * np.cos(arrow_angle_rad) - v * np.sin(arrow_angle_rad)
+        ry = u * np.sin(arrow_angle_rad) + v * np.cos(arrow_angle_rad)
+        # Adjust x for aspect ratio and add center offset
+        return (cx + rx / aspect_ratio, cy + ry)
+
+    # Define arrow shape: pointed tip, triangular tail
+    tip = transform(size, 0)  # pointed end
+    left_mid = transform(0, -width)  # left edge at center
+    left_tail = transform(-size * 0.3, -width * 0.4)  # left tail
+    center_tail = transform(-size * 0.3, 0)  # center tail point
+    right_tail = transform(-size * 0.3, width * 0.4)  # right tail
+    right_mid = transform(0, width)  # right edge at center
+
+    # Create the arrow polygon
+    arrow_points = [tip, right_mid, right_tail, center_tail, left_tail, left_mid]
+
+    ax.add_patch(plt.Polygon(
+        arrow_points,
+        transform=ax.transAxes,
+        facecolor="black",
+        edgecolor="black",
+        linewidth=1,
+        zorder=20
+    ))
+
+    # Add "N" label above the arrow
+    label_offset = 0.03
+    label_x = cx + (size + label_offset) * np.cos(arrow_angle_rad) / aspect_ratio
+    label_y = cy + (size + label_offset) * np.sin(arrow_angle_rad)
+
+    ax.text(
+        label_x, label_y, "N",
+        ha="center", va="center",
+        transform=ax.transAxes,
+        fontsize=12, fontweight="bold", color="black",
+        zorder=20
+    ).set_path_effects([pe.withStroke(linewidth=2.5, foreground="white", alpha=0.9)])
 
 
 def nice_scale_length(map_width_m: float) -> float:
@@ -215,27 +241,26 @@ def nice_scale_length(map_width_m: float) -> float:
     return min(scaled_candidates, key=lambda c: abs(c - map_width_m / 6))
 
 
-def add_scale_bar(ax: plt.Axes, location=(0.92, 0.05)) -> None:
+def add_scale_bar(ax: plt.Axes, location=(0.88, 0.08)) -> None:
     """Add a publication-quality alternating scale bar in the bottom right."""
     x_min, x_max = ax.get_xlim()
     y_min, y_max = ax.get_ylim()
     map_width = x_max - x_min
     bar_length_m = nice_scale_length(map_width)
-    bar_height = (y_max - y_min) * 0.015
+    bar_height = (y_max - y_min) * 0.012
     anchor_x = x_min + (x_max - x_min) * location[0]
     anchor_y = y_min + (y_max - y_min) * location[1]
     right_x = anchor_x
     start_x = right_x - bar_length_m
     mid_x = start_x + bar_length_m / 2
-    
-    ax.add_patch(Rectangle((start_x, anchor_y), bar_length_m / 2, bar_height, facecolor="black", edgecolor="black", linewidth=1, zorder=20))
-    ax.add_patch(Rectangle((mid_x, anchor_y), bar_length_m / 2, bar_height, facecolor="white", edgecolor="black", linewidth=1, zorder=20))
-    ax.add_patch(Rectangle((start_x, anchor_y), bar_length_m, bar_height, facecolor="none", edgecolor="black", linewidth=1, zorder=21))
-    
-    for x_pos, txt in [(start_x, "0"), (mid_x, f"{bar_length_m/2:.0f}"), (right_x, f"{bar_length_m:.0f}")]:
-        ax.text(x_pos, anchor_y - bar_height * 0.5, txt, ha="center", va="top", fontsize=9, fontweight="bold", zorder=22).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
-        
-    ax.text(right_x + bar_length_m * 0.05, anchor_y + bar_height/2, "m", ha="left", va="center", fontsize=10, fontweight="bold", zorder=22).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
+
+    ax.add_patch(Rectangle((start_x, anchor_y), bar_length_m / 2, bar_height, facecolor="black", edgecolor="black", linewidth=0.8, zorder=20))
+    ax.add_patch(Rectangle((mid_x, anchor_y), bar_length_m / 2, bar_height, facecolor="white", edgecolor="black", linewidth=0.8, zorder=20))
+    ax.add_patch(Rectangle((start_x, anchor_y), bar_length_m, bar_height, facecolor="none", edgecolor="black", linewidth=0.8, zorder=21))
+
+    # Add labels with meters unit inline
+    ax.text(start_x, anchor_y - bar_height * 0.4, "0", ha="center", va="top", fontsize=8, fontweight="bold", zorder=22).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.9)])
+    ax.text(right_x, anchor_y - bar_height * 0.4, f"{bar_length_m:.0f} m", ha="center", va="top", fontsize=8, fontweight="bold", zorder=22).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.9)])
 
 
 def calculate_zoom_level(minx: float, miny: float, maxx: float, maxy: float, max_pixels: int = 8000) -> int:
@@ -363,7 +388,7 @@ def plot_study_site(
     view_bounds = (
         rminx - rw * buffer_fraction * 0.3,  # minimal buffer on left
         rmaxx + rw * buffer_fraction * 0.3,  # minimal buffer on right
-        rminy - vertical_buffer * 1.2,        # more ocean at bottom
+        rminy - vertical_buffer * 0.9,        # more ocean at bottom
         rmaxy + vertical_buffer * 1.0         # some land at top
     )
 
@@ -374,9 +399,9 @@ def plot_study_site(
 
     geom_types = set(gdf_rot.geom_type.str.lower())
     if any("line" in g for g in geom_types):
-        gdf_rot.plot(ax=ax, color="#1f3c5b", linewidth=1.6)
+        gdf_rot.plot(ax=ax, color="#00CED1", linewidth=1.6)
     else:
-        gdf_rot.plot(ax=ax, color="#1f3c5b", markersize=30, alpha=0.9)
+        gdf_rot.plot(ax=ax, color="#00CED1", markersize=30, alpha=0.9)
     
     if "mop_id" in gdf_rot.columns:
         annotate_regions(ax, gdf_rot)

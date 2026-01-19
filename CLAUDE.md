@@ -46,8 +46,12 @@ transect-transformer/
 │   │   └── verify_setup.py        # Verify installation
 │   └── debug_orientation.py       # Debug script for orientation issues
 ├── configs/                       # Model and training configurations
-├── tests/                         # Test suite
-│   └── test_data/                 # Data module tests
+├── tests/                         # Test suite (57 tests)
+│   ├── test_data/                 # Data module tests
+│   │   └── test_transect_extractor.py  # Extractor + cube format tests
+│   ├── test_apps/                 # Application tests
+│   │   └── test_transect_viewer.py     # Viewer data_loader + validators
+│   └── test_utils.py              # Config utility tests
 ├── README.md                      # Project README
 └── CLAUDE.md                      # This file - AI assistant instructions
 ```
@@ -56,11 +60,22 @@ transect-transformer/
 
 ### Environment Setup
 ```bash
-# Create environment and install dependencies
+# Create and activate virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 
-# Run tests
+# Run all tests (57 tests)
+pytest tests/ -v
+
+# Run with coverage
 pytest tests/ --cov=src --cov-report=html
+
+# Run specific test modules
+pytest tests/test_data/ -v
+pytest tests/test_apps/ -v
 
 # Type checking
 mypy src/
@@ -142,11 +157,12 @@ streamlit run apps/transect_viewer/app.py
 streamlit run apps/transect_viewer/app.py --server.port 8501
 ```
 
-The transect viewer supports:
-- **Data Dashboard**: Overview statistics, feature distributions, quality checks
-- **Single Transect Inspector**: Detailed view of individual transects with all 12 features
-- **Transect Evolution**: Compare transects across time epochs (multi-file)
-- **Cross-Transect View**: Spatial analysis and multi-transect comparison
+The transect viewer supports (cube format NPZ files):
+- **Data Dashboard**: Overview statistics, feature distributions, quality checks, temporal coverage
+- **Single Transect Inspector**: Detailed view of individual transects with all 12 features at any epoch
+- **Temporal Slider**: Scrub through time for a single transect with fixed y-axis for comparison
+- **Transect Evolution**: Overlaid profiles, change detection, temporal heatmap across all epochs
+- **Cross-Transect View**: Spatial analysis and multi-transect comparison at selected epoch
 
 ## Architecture Overview
 
@@ -332,22 +348,33 @@ Multiple attention mechanisms reveal different physical attributions:
 
 ## Testing Strategy
 
-### Unit Tests
-Each module has corresponding tests in `tests/`:
-- `test_data/`: Test data loaders, transect extraction, label generation
-- `test_models/`: Test encoders, fusion, heads, full model (shape checks, NaN detection)
-- `test_training/`: Test loss functions, trainer, scheduler
+### Current Test Suite (57 tests)
+Run all tests: `pytest tests/ -v`
 
-### Integration Tests
-- Full forward/backward pass through model
-- Training loop for 2 epochs on synthetic data
-- Inference on batch data
+**test_data/test_transect_extractor.py** (22 tests):
+- `TestShapefileTransectExtractorInit`: Initialization, feature/metadata names
+- `TestTransectDirection`: Direction vector computation from LineString
+- `TestTransectExtraction`: Point extraction and resampling
+- `TestFeatureComputation`: Feature value ranges, metadata computation
+- `TestSaveLoad`: NPZ save/load roundtrip
+- `TestEdgeCases`: Insufficient points, edge case handling
+- `TestFullPipeline`: End-to-end extraction with mocked LAS
+- `TestCubeFormat`: Flat-to-cube conversion, temporal ordering, save/load
+- `TestDateParsing`: LAS filename date extraction
 
-### Checkpoints
+**test_apps/test_transect_viewer.py** (27 tests):
+- `TestDataLoader`: Cube format detection, dimension extraction, transect retrieval, temporal slicing
+- `TestValidators`: NaN checking, value range validation, dataset validation, statistics
+- `TestSaveLoadRoundtrip`: NPZ roundtrip with string arrays
+
+**test_utils.py** (8 tests):
+- Config loading, validation, overrides, save/load
+
+### Test Conventions
 - Test shapes obsessively: `assert tensor.shape == expected_shape`
 - Verify no NaN: `assert not torch.isnan(tensor).any()`
 - Check value ranges (e.g., sigmoid outputs in [0,1])
-- Validate attention weights sum to 1 along key dimension
+- Use synthetic data fixtures for deterministic testing
 
 ## Development Workflow
 

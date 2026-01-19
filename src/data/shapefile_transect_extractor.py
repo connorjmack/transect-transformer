@@ -565,19 +565,19 @@ class ShapefileTransectExtractor:
             logger.warning(f"COPC query failed for {las_path}: {e}, falling back to chunked")
             return None
 
-    def _extract_transect_copc_perquery(
+    def _extract_transect_from_copc_reader(
         self,
-        las_path: Path,
+        reader: "CopcReader",
         line: "LineString",
         transect_id: int,
     ) -> Optional[Dict[str, np.ndarray]]:
-        """Extract a single transect using per-transect COPC spatial query.
+        """Extract a single transect using an already-open COPC reader.
 
-        This is the most efficient approach for COPC files - queries only the
-        narrow buffer around one transect instead of loading all transects' points.
+        This is the most efficient approach for COPC files - reuses an open reader
+        and queries only the narrow buffer around one transect.
 
         Args:
-            las_path: Path to COPC-enabled LAS/LAZ file
+            reader: Already-opened CopcReader instance
             line: Transect LineString geometry
             transect_id: Transect ID for metadata
 
@@ -585,23 +585,19 @@ class ShapefileTransectExtractor:
             Resampled transect dict or None if extraction fails
         """
         try:
-            from laspy import CopcReader
             from laspy.copc import Bounds
         except ImportError:
             return None
 
-        # Get transect bounds with buffer
-        bounds_gdf = gpd.GeoDataFrame([{'geometry': line}], crs='EPSG:2230')
-        transect_bounds = bounds_gdf.total_bounds  # (minx, miny, maxx, maxy)
+        # Get transect bounds directly from Shapely (fast - no GeoDataFrame!)
+        minx, miny, maxx, maxy = line.bounds
 
-        x_min = transect_bounds[0] - self.buffer_m - 1
-        y_min = transect_bounds[1] - self.buffer_m - 1
-        x_max = transect_bounds[2] + self.buffer_m + 1
-        y_max = transect_bounds[3] + self.buffer_m + 1
+        x_min = minx - self.buffer_m - 1
+        y_min = miny - self.buffer_m - 1
+        x_max = maxx + self.buffer_m + 1
+        y_max = maxy + self.buffer_m + 1
 
         try:
-            reader = CopcReader.open(str(las_path))
-
             # Query narrow strip around this transect only
             query_bounds = Bounds(
                 mins=np.array([x_min, y_min]),
@@ -687,8 +683,31 @@ class ShapefileTransectExtractor:
             return resampled
 
         except Exception as e:
-            logger.debug(f"Per-transect COPC query failed: {e}")
+            logger.debug(f"COPC transect query failed: {e}")
             return None
+
+    def _is_copc_file(self, las_path: Path) -> bool:
+        """Check if file is COPC format (fast header check).
+
+        Args:
+            las_path: Path to LAS/LAZ file
+
+        Returns:
+            True if file has COPC spatial index
+        """
+        # Fast path: check filename first
+        if '.copc.' in las_path.name.lower():
+            return True
+
+        # Slower path: check VLR headers
+        try:
+            with laspy.open(las_path) as f:
+                for vlr in f.header.vlrs:
+                    if vlr.user_id == 'copc':
+                        return True
+            return False
+        except Exception:
+            return False
 
     def get_transect_direction(
         self, line: "LineString"

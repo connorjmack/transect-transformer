@@ -165,7 +165,15 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False) -> T
             # Clean up partial output if it exists
             if copc_path.exists():
                 copc_path.unlink()
-            return False, f"PDAL error: {result.stderr.strip()}"
+
+            # Collect error info
+            error_msg = result.stderr.strip()
+            if not error_msg:
+                error_msg = result.stdout.strip()
+            if not error_msg:
+                error_msg = f"PDAL failed with exit code {result.returncode}"
+
+            return False, f"PDAL error: {error_msg}"
 
         # Verify output exists and has reasonable size
         if not copc_path.exists():

@@ -20,6 +20,7 @@ Example:
     >>> extractor.save_transects(transects, "output.npz")
 """
 
+import gc
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Callable
 
@@ -320,8 +321,8 @@ class ShapefileTransectExtractor:
         """Load LAS file with spatial filtering - only loads points within bounds.
 
         This is much faster than load_las_file() when you only need a small
-        spatial subset of a large file. Reads the file in chunks to minimize
-        memory usage.
+        spatial subset of a large file. If the file is COPC format, uses fast
+        spatial index queries (10-100x faster). Otherwise reads in chunks.
 
         Args:
             las_path: Path to LAS/LAZ file
@@ -343,7 +344,14 @@ class ShapefileTransectExtractor:
             logger.debug(f"Skipping {las_path.name}: no overlap with bounds")
             return None
 
-        logger.info(f"Loading LAS file (spatial filter): {las_path}")
+        # Try COPC fast path if file is COPC format
+        if '.copc.' in las_path.name.lower():
+            copc_result = self._load_copc_spatial(las_path, bounds)
+            if copc_result is not None:
+                return copc_result
+            # Fall through to chunked loading if COPC fails
+
+        logger.info(f"Loading LAS file (chunked spatial filter): {las_path}")
 
         # Collect filtered points from chunks
         xyz_chunks = []
@@ -450,6 +458,111 @@ class ShapefileTransectExtractor:
         logger.info(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
 
         return data
+
+    def _load_copc_spatial(
+        self,
+        las_path: Path,
+        bounds: Tuple[float, float, float, float],
+    ) -> Optional[Dict[str, np.ndarray]]:
+        """Load points within bounds using COPC spatial index (10-100x faster).
+
+        COPC (Cloud Optimized Point Cloud) files contain spatial indices that
+        allow direct retrieval of points within a bounding box without scanning
+        the entire file.
+
+        Args:
+            las_path: Path to COPC-enabled LAS/LAZ file
+            bounds: (x_min, y_min, x_max, y_max) bounding box
+
+        Returns:
+            Dictionary with point data, or None if query fails/no points
+        """
+        try:
+            from laspy import CopcReader
+        except ImportError:
+            logger.debug("CopcReader not available, falling back to chunked loading")
+            return None
+
+        x_min, y_min, x_max, y_max = bounds
+        logger.info(f"Loading COPC file (fast spatial query): {las_path}")
+
+        try:
+            reader = CopcReader.open(str(las_path))
+
+            # Query points within 2D bounds (use extreme z range)
+            points = reader.query(
+                mins=np.array([x_min, y_min, -1e10]),
+                maxs=np.array([x_max, y_max, 1e10])
+            )
+            reader.close()
+
+            if len(points) == 0:
+                logger.debug(f"COPC query returned no points for {las_path.name}")
+                return None
+
+            # Convert to standard dict format
+            xyz = np.column_stack([points.x, points.y, points.z]).astype(np.float64)
+            n_points = len(xyz)
+
+            # Normalize intensity
+            if hasattr(points, 'intensity'):
+                intensity = np.asarray(points.intensity, dtype=np.float32)
+                max_int = intensity.max() if intensity.max() > 0 else 1
+                intensity /= max_int
+            else:
+                intensity = np.zeros(n_points, dtype=np.float32)
+
+            # Normalize RGB from 16-bit
+            if hasattr(points, 'red'):
+                red = np.asarray(points.red, dtype=np.float32) / 65535.0
+                green = np.asarray(points.green, dtype=np.float32) / 65535.0
+                blue = np.asarray(points.blue, dtype=np.float32) / 65535.0
+            else:
+                red = np.zeros(n_points, dtype=np.float32)
+                green = np.zeros(n_points, dtype=np.float32)
+                blue = np.zeros(n_points, dtype=np.float32)
+
+            # Classification
+            if hasattr(points, 'classification'):
+                classification = np.asarray(points.classification, dtype=np.float32)
+            else:
+                classification = np.zeros(n_points, dtype=np.float32)
+
+            # Return info
+            if hasattr(points, 'return_number'):
+                return_number = np.asarray(points.return_number, dtype=np.float32)
+            else:
+                return_number = np.ones(n_points, dtype=np.float32)
+
+            if hasattr(points, 'number_of_returns'):
+                num_returns = np.asarray(points.number_of_returns, dtype=np.float32)
+            else:
+                num_returns = np.ones(n_points, dtype=np.float32)
+
+            data = {
+                'xyz': xyz,
+                'x': xyz[:, 0],
+                'y': xyz[:, 1],
+                'z': xyz[:, 2],
+                'intensity': intensity,
+                'red': red,
+                'green': green,
+                'blue': blue,
+                'classification': classification,
+                'return_number': return_number,
+                'num_returns': num_returns,
+            }
+
+            logger.info(f"COPC query returned {n_points:,} points (fast path)")
+            logger.info(f"  X range: {xyz[:, 0].min():.2f} - {xyz[:, 0].max():.2f}")
+            logger.info(f"  Y range: {xyz[:, 1].min():.2f} - {xyz[:, 1].max():.2f}")
+            logger.info(f"  Z range: {xyz[:, 2].min():.2f} - {xyz[:, 2].max():.2f}")
+
+            return data
+
+        except Exception as e:
+            logger.warning(f"COPC query failed for {las_path}: {e}, falling back to chunked")
+            return None
 
     def get_transect_direction(
         self, line: "LineString"
@@ -1041,6 +1154,10 @@ class ShapefileTransectExtractor:
                 all_las_sources.extend([result['las_source']] * len(result['features']))
                 total_extracted += result['extracted']
                 total_skipped += result['skipped']
+
+                # Explicit memory cleanup after each file to prevent OOM
+                del result
+                gc.collect()
 
                 if not show_progress or not HAS_TQDM:
                     logger.info(

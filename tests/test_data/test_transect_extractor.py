@@ -907,5 +907,117 @@ class TestDateParsing:
         assert date is None
 
 
+class TestCopcSupport:
+    """Test COPC (Cloud Optimized Point Cloud) support."""
+
+    def test_is_copc_file_detection(self):
+        """Test COPC file detection by filename."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import is_copc_file
+
+        # Note: is_copc_file checks file header, not just filename
+        # For files that don't exist, it returns False
+        assert is_copc_file(Path("nonexistent.copc.laz")) is False
+        assert is_copc_file(Path("nonexistent.las")) is False
+
+    def test_get_copc_path(self):
+        """Test COPC path generation."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import get_copc_path
+
+        assert get_copc_path(Path("scan.las")) == Path("scan.copc.laz")
+        assert get_copc_path(Path("scan.laz")) == Path("scan.copc.laz")
+        assert get_copc_path(Path("/path/to/scan.las")) == Path("/path/to/scan.copc.laz")
+        # Already COPC should return same path
+        assert get_copc_path(Path("scan.copc.laz")) == Path("scan.copc.laz")
+
+    def test_find_copc_version_no_file(self):
+        """Test finding COPC version when no file exists."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import find_copc_version
+
+        # Non-existent file should return None
+        result = find_copc_version(Path("/nonexistent/path/scan.las"))
+        assert result is None
+
+    def test_find_copc_version_with_copc(self, tmp_path):
+        """Test finding COPC version when it exists."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import find_copc_version
+
+        # Create fake files
+        original = tmp_path / "scan.las"
+        copc = tmp_path / "scan.copc.laz"
+        original.touch()
+        copc.touch()
+
+        # Should find COPC version
+        result = find_copc_version(original)
+        assert result == copc
+
+    def test_substitute_copc_files(self, tmp_path):
+        """Test substituting LAS files with COPC versions."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.extract_transects import substitute_copc_files
+
+        # Create some test files
+        las1 = tmp_path / "scan1.las"
+        las2 = tmp_path / "scan2.las"
+        copc1 = tmp_path / "scan1.copc.laz"
+
+        las1.touch()
+        las2.touch()
+        copc1.touch()  # Only scan1 has COPC version
+
+        las_files = [las1, las2]
+        result, n_substituted = substitute_copc_files(las_files, verbose=False)
+
+        assert n_substituted == 1
+        assert result[0] == copc1  # scan1 should be substituted
+        assert result[1] == las2   # scan2 should remain unchanged
+
+    def test_copc_loading_fallback(self, extractor, synthetic_las_data):
+        """Test that COPC loading falls back gracefully for non-COPC files."""
+        # _load_copc_spatial should return None for non-COPC files
+        # which causes fallback to chunked loading
+        result = extractor._load_copc_spatial(
+            Path("nonexistent.copc.laz"),
+            bounds=(0, 0, 100, 100)
+        )
+        # Should return None since file doesn't exist
+        assert result is None
+
+
+class TestMakeCopcScript:
+    """Test make_copc.py script functions."""
+
+    def test_get_copc_path_from_script(self):
+        """Test COPC path generation in make_copc script."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.make_copc import get_copc_path
+
+        assert get_copc_path(Path("scan.las")) == Path("scan.copc.laz")
+        assert get_copc_path(Path("scan.laz")) == Path("scan.copc.laz")
+        assert get_copc_path(Path("scan.copc.laz")) == Path("scan.copc.laz")
+
+    def test_check_pdal_available(self):
+        """Test PDAL availability check."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from scripts.processing.make_copc import check_pdal_available
+
+        available, message = check_pdal_available()
+        # Result depends on whether PDAL is installed
+        assert isinstance(available, bool)
+        assert isinstance(message, str)
+        assert len(message) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

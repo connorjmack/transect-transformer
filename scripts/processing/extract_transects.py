@@ -51,6 +51,7 @@ Usage:
 """
 
 import argparse
+import gc
 import platform
 import re
 import sys
@@ -59,6 +60,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+
+try:
+    import laspy
+    from laspy import CopcReader
+    HAS_COPC = True
+except ImportError:
+    HAS_COPC = False
+    laspy = None
+    CopcReader = None
 
 # Add project root to path for imports
 # __file__ is scripts/processing/extract_transects.py
@@ -100,6 +110,100 @@ PATH_MAPPINGS = {
         '/project/': '/Volumes/',
     },
 }
+
+
+# =============================================================================
+# COPC (Cloud Optimized Point Cloud) Support
+# =============================================================================
+
+def is_copc_file(las_path: Path) -> bool:
+    """Check if LAS file has COPC spatial index (fast header check).
+
+    COPC files enable direct spatial queries without scanning the entire file,
+    providing 10-100x faster loading for narrow spatial queries.
+
+    Args:
+        las_path: Path to LAS/LAZ file
+
+    Returns:
+        True if file has COPC VLR, False otherwise
+    """
+    if not HAS_COPC or laspy is None:
+        return False
+
+    try:
+        with laspy.open(las_path) as f:
+            for vlr in f.header.vlrs:
+                if vlr.user_id == 'copc':
+                    return True
+        return False
+    except Exception as e:
+        logger.debug(f"Could not check COPC status for {las_path}: {e}")
+        return False
+
+
+def get_copc_path(las_path: Path) -> Path:
+    """Get the expected COPC path for a LAS file.
+
+    Args:
+        las_path: Path to original LAS/LAZ file
+
+    Returns:
+        Path where COPC version would be (same dir, .copc.laz extension)
+    """
+    stem = las_path.stem
+    if stem.endswith('.copc'):
+        return las_path
+    return las_path.with_name(stem + '.copc.laz')
+
+
+def find_copc_version(las_path: Path) -> Optional[Path]:
+    """Check if a COPC version exists for a LAS file.
+
+    Args:
+        las_path: Path to original LAS/LAZ file
+
+    Returns:
+        Path to COPC version if it exists, None otherwise
+    """
+    # If already a COPC file, return as-is
+    if '.copc.' in las_path.name.lower():
+        if las_path.exists():
+            return las_path
+        return None
+
+    # Check for .copc.laz version
+    copc_path = get_copc_path(las_path)
+    if copc_path.exists():
+        return copc_path
+
+    return None
+
+
+def substitute_copc_files(las_files: List[Path], verbose: bool = True) -> Tuple[List[Path], int]:
+    """Substitute LAS files with COPC versions where available.
+
+    Args:
+        las_files: List of LAS/LAZ file paths
+        verbose: If True, log substitutions
+
+    Returns:
+        Tuple of (updated file list, number of substitutions made)
+    """
+    result = []
+    substituted = 0
+
+    for las_path in las_files:
+        copc_path = find_copc_version(las_path)
+        if copc_path and copc_path != las_path:
+            result.append(copc_path)
+            substituted += 1
+            if verbose:
+                logger.debug(f"Using COPC: {copc_path.name} instead of {las_path.name}")
+        else:
+            result.append(las_path)
+
+    return result, substituted
 
 
 def get_current_os() -> str:
@@ -673,6 +777,12 @@ def main():
         help="Skip automatic QC checks after extraction",
     )
 
+    parser.add_argument(
+        "--prefer-copc",
+        action="store_true",
+        help="Automatically use .copc.laz files when available (10-100x faster loading)",
+    )
+
     args = parser.parse_args()
 
     # Apply beach preset if specified
@@ -746,6 +856,14 @@ def main():
         original_count = len(las_files)
         las_files = las_files[:args.limit]
         logger.info(f"Limited to first {args.limit} of {original_count} LAS files (--limit)")
+
+    # Substitute COPC files if --prefer-copc is set
+    if args.prefer_copc:
+        las_files, n_copc = substitute_copc_files(las_files, verbose=True)
+        if n_copc > 0:
+            logger.info(f"Substituted {n_copc} files with COPC versions (10-100x faster loading)")
+        else:
+            logger.info("No COPC versions found - using original LAS files")
 
     # Check all files exist
     for f in las_files:

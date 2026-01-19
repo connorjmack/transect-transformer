@@ -11,6 +11,10 @@ This project may connect to cloud servers with production data. NEVER:
 - Force push to git repositories (`git push --force`)
 - Execute destructive operations on remote servers
 
+## Output Formatting
+
+When providing Python or shell commands for the user to copy and paste, **always format them as a single line**. Do not split commands across multiple lines with backslashes (`\`) - put everything on one line so it can be copied and pasted directly without issues.
+
 ## Project Overview
 
 **CliffCast** is a transformer-based deep learning model for predicting coastal cliff erosion risk. The model processes multi-temporal 1D transect data from LiDAR scans along with environmental forcing data (wave conditions and precipitation) to predict multiple targets: risk index, collapse probability at multiple time horizons, expected retreat distance, and failure mode classification.

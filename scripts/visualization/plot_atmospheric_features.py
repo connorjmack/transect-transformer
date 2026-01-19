@@ -438,6 +438,356 @@ def plot_erosion_potential(
     plt.close()
 
 
+def plot_data_cube_structure(
+    data: Dict[str, pd.DataFrame],
+    output_path: Path,
+) -> None:
+    """Create schematic figure showing atmospheric data cube and feature vector structure.
+
+    This figure illustrates:
+    1. The 3D data cube structure (beaches × time × features)
+    2. The 24 atmospheric features organized by category
+    3. The 90-day lookback window alignment to scan dates
+    4. How the cube feeds into the model's EnvironmentalEncoder
+    """
+    fig = plt.figure(figsize=(18, 14))
+
+    # Use gridspec for flexible layout
+    gs = fig.add_gridspec(3, 3, height_ratios=[1.2, 1, 1], width_ratios=[1.2, 1, 1],
+                          hspace=0.35, wspace=0.3)
+
+    # === Panel A: 3D Data Cube Visualization ===
+    ax_cube = fig.add_subplot(gs[0, 0], projection='3d')
+
+    # Cube dimensions
+    n_beaches = 6
+    n_days = 90  # lookback window
+    n_features = 24
+
+    # Draw cube wireframe
+    # Front face
+    ax_cube.plot([0, n_features], [0, 0], [0, 0], 'k-', linewidth=2)
+    ax_cube.plot([0, n_features], [n_days, n_days], [0, 0], 'k-', linewidth=2)
+    ax_cube.plot([0, 0], [0, n_days], [0, 0], 'k-', linewidth=2)
+    ax_cube.plot([n_features, n_features], [0, n_days], [0, 0], 'k-', linewidth=2)
+
+    # Back face
+    ax_cube.plot([0, n_features], [0, 0], [n_beaches, n_beaches], 'k-', linewidth=2)
+    ax_cube.plot([0, n_features], [n_days, n_days], [n_beaches, n_beaches], 'k-', linewidth=2)
+    ax_cube.plot([0, 0], [0, n_days], [n_beaches, n_beaches], 'k-', linewidth=2)
+    ax_cube.plot([n_features, n_features], [0, n_days], [n_beaches, n_beaches], 'k-', linewidth=2)
+
+    # Connecting edges
+    ax_cube.plot([0, 0], [0, 0], [0, n_beaches], 'k-', linewidth=2)
+    ax_cube.plot([n_features, n_features], [0, 0], [0, n_beaches], 'k-', linewidth=2)
+    ax_cube.plot([0, 0], [n_days, n_days], [0, n_beaches], 'k-', linewidth=2)
+    ax_cube.plot([n_features, n_features], [n_days, n_days], [0, n_beaches], 'k-', linewidth=2)
+
+    # Fill faces with semi-transparent colors
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    # Time-Feature face (front, z=0)
+    verts_tf = [[(0, 0, 0), (n_features, 0, 0), (n_features, n_days, 0), (0, n_days, 0)]]
+    ax_cube.add_collection3d(Poly3DCollection(verts_tf, alpha=0.3, facecolor='steelblue', edgecolor='k'))
+
+    # Beach-Feature face (bottom, y=0)
+    verts_bf = [[(0, 0, 0), (n_features, 0, 0), (n_features, 0, n_beaches), (0, 0, n_beaches)]]
+    ax_cube.add_collection3d(Poly3DCollection(verts_bf, alpha=0.3, facecolor='coral', edgecolor='k'))
+
+    # Beach-Time face (left, x=0)
+    verts_bt = [[(0, 0, 0), (0, n_days, 0), (0, n_days, n_beaches), (0, 0, n_beaches)]]
+    ax_cube.add_collection3d(Poly3DCollection(verts_bt, alpha=0.3, facecolor='lightgreen', edgecolor='k'))
+
+    # Dimension labels with arrows
+    ax_cube.set_xlabel('Features (24)', fontsize=11, fontweight='bold', labelpad=10)
+    ax_cube.set_ylabel('Time (90 days)', fontsize=11, fontweight='bold', labelpad=10)
+    ax_cube.set_zlabel('Beaches (6)', fontsize=11, fontweight='bold', labelpad=10)
+
+    # Add dimension values
+    ax_cube.text(n_features/2, -8, -1, f'D = {n_features}', fontsize=10, ha='center')
+    ax_cube.text(-5, n_days/2, -1, f'T = {n_days}', fontsize=10, ha='center')
+    ax_cube.text(-5, -5, n_beaches/2, f'B = {n_beaches}', fontsize=10, ha='center')
+
+    ax_cube.set_xlim(0, n_features)
+    ax_cube.set_ylim(0, n_days)
+    ax_cube.set_zlim(0, n_beaches)
+    ax_cube.view_init(elev=20, azim=45)
+    ax_cube.set_title('A) Atmospheric Data Cube Structure\n(B, T, D) = (6 beaches, 90 days, 24 features)',
+                      fontsize=12, fontweight='bold', pad=15)
+
+    # Hide axis ticks for cleaner look
+    ax_cube.set_xticks([])
+    ax_cube.set_yticks([])
+    ax_cube.set_zticks([])
+
+    # === Panel B: Feature Vector Categories ===
+    ax_features = fig.add_subplot(gs[0, 1:])
+    ax_features.axis('off')
+
+    # Feature categories with colors
+    feature_categories = {
+        'Raw Measurements\n(from PRISM)': {
+            'color': '#e41a1c',
+            'features': [
+                ('precip_mm', 'Daily precipitation'),
+                ('temp_mean_c', 'Mean temperature'),
+                ('temp_min_c', 'Min temperature'),
+                ('temp_max_c', 'Max temperature'),
+                ('dewpoint_c', 'Dewpoint temperature'),
+            ]
+        },
+        'Cumulative\nPrecipitation': {
+            'color': '#377eb8',
+            'features': [
+                ('precip_7d', '7-day rolling sum'),
+                ('precip_30d', '30-day rolling sum'),
+                ('precip_60d', '60-day rolling sum'),
+                ('precip_90d', '90-day rolling sum'),
+            ]
+        },
+        'Antecedent\nConditions': {
+            'color': '#4daf4a',
+            'features': [
+                ('api', 'Antecedent precip index (k=0.9)'),
+                ('days_since_rain', 'Days since >1mm rain'),
+                ('consecutive_dry_days', 'Dry days before event'),
+            ]
+        },
+        'Intensity\nMetrics': {
+            'color': '#984ea3',
+            'features': [
+                ('rain_day_flag', 'Binary: precip >1mm'),
+                ('intensity_class', '0=none/1=light/2=mod/3=heavy'),
+                ('max_precip_7d', 'Max daily in 7 days'),
+                ('max_precip_30d', 'Max daily in 30 days'),
+            ]
+        },
+        'Wetting-Drying\nCycles': {
+            'color': '#ff7f00',
+            'features': [
+                ('wet_dry_cycles_30d', '30-day cycle count'),
+                ('wet_dry_cycles_90d', '90-day cycle count'),
+            ]
+        },
+        'Evaporative\nDemand': {
+            'color': '#a65628',
+            'features': [
+                ('vpd', 'Vapor pressure deficit (kPa)'),
+                ('vpd_7d_mean', '7-day mean VPD'),
+            ]
+        },
+        'Freeze-Thaw\n(for transfer)': {
+            'color': '#666666',
+            'features': [
+                ('freeze_flag', 'Binary: Tmin < 0°C'),
+                ('marginal_freeze_flag', 'Binary: Tmin < 2°C'),
+                ('freeze_thaw_cycles_30d', '30-day F-T cycles'),
+                ('freeze_thaw_cycles_season', 'Water year F-T total'),
+            ]
+        },
+    }
+
+    # Calculate positions
+    n_cats = len(feature_categories)
+    cat_width = 0.13
+    cat_spacing = 0.14
+    start_x = 0.02
+
+    ax_features.set_title('B) Feature Vector: 24 Atmospheric Features by Category',
+                          fontsize=12, fontweight='bold', loc='left', pad=10)
+
+    for i, (cat_name, cat_info) in enumerate(feature_categories.items()):
+        x = start_x + i * cat_spacing
+        color = cat_info['color']
+        features = cat_info['features']
+
+        # Category header box
+        rect = mpatches.FancyBboxPatch(
+            (x, 0.75), cat_width - 0.01, 0.18,
+            boxstyle="round,pad=0.02",
+            facecolor=color, edgecolor='black', linewidth=2, alpha=0.8
+        )
+        ax_features.add_patch(rect)
+        ax_features.text(x + cat_width/2 - 0.005, 0.84, cat_name,
+                        fontsize=8, fontweight='bold', ha='center', va='center',
+                        color='white')
+
+        # Feature list
+        y_pos = 0.68
+        for feat_name, feat_desc in features:
+            ax_features.text(x + 0.005, y_pos, f'• {feat_name}', fontsize=7,
+                           fontweight='bold', color=color, va='top')
+            ax_features.text(x + 0.005, y_pos - 0.06, f'  {feat_desc}', fontsize=6,
+                           color='gray', va='top')
+            y_pos -= 0.13
+
+    ax_features.set_xlim(0, 1)
+    ax_features.set_ylim(0, 1)
+
+    # === Panel C: Temporal Alignment Diagram ===
+    ax_temporal = fig.add_subplot(gs[1, :])
+    ax_temporal.axis('off')
+
+    ax_temporal.set_title('C) Temporal Alignment: 90-Day Lookback Window',
+                          fontsize=12, fontweight='bold', loc='left', pad=10)
+
+    # Timeline
+    ax_temporal.arrow(0.05, 0.5, 0.88, 0, head_width=0.05, head_length=0.02,
+                     fc='black', ec='black')
+    ax_temporal.text(0.95, 0.5, 'Time', fontsize=10, va='center')
+
+    # Scan date marker
+    scan_x = 0.85
+    ax_temporal.plot([scan_x], [0.5], 'rv', markersize=15, zorder=5)
+    ax_temporal.text(scan_x, 0.35, 'LiDAR\nScan Date', fontsize=9, ha='center', fontweight='bold')
+
+    # 90-day window
+    window_start = scan_x - 0.45
+    window_rect = mpatches.FancyBboxPatch(
+        (window_start, 0.45), 0.45, 0.10,
+        boxstyle="round,pad=0.01",
+        facecolor='steelblue', edgecolor='darkblue', linewidth=2, alpha=0.3
+    )
+    ax_temporal.add_patch(window_rect)
+
+    # Window annotation
+    ax_temporal.annotate('', xy=(window_start, 0.65), xytext=(scan_x, 0.65),
+                        arrowprops=dict(arrowstyle='<->', color='darkblue', lw=2))
+    ax_temporal.text((window_start + scan_x) / 2, 0.72, '90 days lookback',
+                    fontsize=10, ha='center', fontweight='bold', color='darkblue')
+
+    # Sample days within window
+    for i, day_offset in enumerate([0, 30, 60, 89]):
+        x = scan_x - (day_offset / 90) * 0.45
+        ax_temporal.plot([x], [0.5], 'ko', markersize=6)
+        ax_temporal.text(x, 0.58, f't-{day_offset}', fontsize=7, ha='center', rotation=45)
+
+    # Output shape annotation
+    ax_temporal.text(0.5, 0.15, 'Output: (90, 24) feature matrix per beach per scan',
+                    fontsize=11, ha='center', fontweight='bold',
+                    bbox=dict(boxstyle='round', facecolor='lightyellow', edgecolor='orange'))
+
+    ax_temporal.set_xlim(0, 1)
+    ax_temporal.set_ylim(0, 1)
+
+    # === Panel D: Sample Feature Vector Heatmap ===
+    ax_heatmap = fig.add_subplot(gs[2, 0])
+
+    # Get sample data from Del Mar
+    df = data['delmar'].copy()
+
+    # Get a 90-day window sample
+    sample_end = df['date'].iloc[-1]
+    sample_start = sample_end - pd.Timedelta(days=89)
+    sample_df = df[(df['date'] >= sample_start) & (df['date'] <= sample_end)].copy()
+
+    # Select feature columns (24 features)
+    feature_cols = [
+        'precip_mm', 'temp_mean_c', 'temp_min_c', 'temp_max_c', 'dewpoint_c',
+        'precip_7d', 'precip_30d', 'precip_60d', 'precip_90d',
+        'api', 'days_since_rain', 'consecutive_dry_days',
+        'rain_day_flag', 'intensity_class', 'max_precip_7d', 'max_precip_30d',
+        'wet_dry_cycles_30d', 'wet_dry_cycles_90d',
+        'vpd', 'vpd_7d_mean',
+        'freeze_flag', 'marginal_freeze_flag', 'freeze_thaw_cycles_30d', 'freeze_thaw_cycles_season'
+    ]
+
+    # Normalize features for visualization
+    sample_matrix = sample_df[feature_cols].values
+    sample_normalized = (sample_matrix - sample_matrix.min(axis=0)) / (sample_matrix.max(axis=0) - sample_matrix.min(axis=0) + 1e-8)
+
+    im = ax_heatmap.imshow(sample_normalized.T, aspect='auto', cmap='viridis')
+    ax_heatmap.set_xlabel('Days (0 = oldest, 89 = scan date)', fontsize=10)
+    ax_heatmap.set_ylabel('Feature Index', fontsize=10)
+    ax_heatmap.set_title('D) Sample Feature Matrix (90×24)\nDel Mar, normalized',
+                         fontsize=11, fontweight='bold', loc='left')
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax_heatmap, shrink=0.8)
+    cbar.set_label('Normalized Value', fontsize=9)
+
+    # === Panel E: Beach dimension illustration ===
+    ax_beaches = fig.add_subplot(gs[2, 1])
+    ax_beaches.axis('off')
+
+    ax_beaches.set_title('E) Beach Dimension (B=6)',
+                         fontsize=11, fontweight='bold', loc='left')
+
+    beach_names = ['Blacks', 'Torrey', 'Del Mar', 'Solana', 'San Elijo', 'Encinitas']
+    beach_colors_list = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#a65628']
+
+    for i, (name, color) in enumerate(zip(beach_names, beach_colors_list)):
+        y = 0.85 - i * 0.13
+        rect = mpatches.FancyBboxPatch(
+            (0.1, y - 0.04), 0.8, 0.10,
+            boxstyle="round,pad=0.02",
+            facecolor=color, edgecolor='black', linewidth=1.5, alpha=0.7
+        )
+        ax_beaches.add_patch(rect)
+        ax_beaches.text(0.5, y, f'{i}: {name}', fontsize=10, ha='center', va='center',
+                       fontweight='bold', color='white')
+
+    ax_beaches.text(0.5, 0.05, 'South → North ordering', fontsize=9, ha='center',
+                   style='italic', color='gray')
+    ax_beaches.set_xlim(0, 1)
+    ax_beaches.set_ylim(0, 1)
+
+    # === Panel F: Model integration ===
+    ax_model = fig.add_subplot(gs[2, 2])
+    ax_model.axis('off')
+
+    ax_model.set_title('F) Model Integration',
+                       fontsize=11, fontweight='bold', loc='left')
+
+    # Input box
+    input_rect = mpatches.FancyBboxPatch(
+        (0.1, 0.7), 0.8, 0.20,
+        boxstyle="round,pad=0.02",
+        facecolor='lightblue', edgecolor='darkblue', linewidth=2
+    )
+    ax_model.add_patch(input_rect)
+    ax_model.text(0.5, 0.8, 'Atmospheric Input\n(B, 90, 24)', fontsize=10,
+                 ha='center', va='center', fontweight='bold')
+
+    # Arrow
+    ax_model.arrow(0.5, 0.65, 0, -0.15, head_width=0.05, head_length=0.03,
+                  fc='black', ec='black')
+
+    # Encoder box
+    encoder_rect = mpatches.FancyBboxPatch(
+        (0.1, 0.35), 0.8, 0.15,
+        boxstyle="round,pad=0.02",
+        facecolor='coral', edgecolor='darkred', linewidth=2
+    )
+    ax_model.add_patch(encoder_rect)
+    ax_model.text(0.5, 0.425, 'Environmental\nEncoder', fontsize=10,
+                 ha='center', va='center', fontweight='bold')
+
+    # Arrow
+    ax_model.arrow(0.5, 0.3, 0, -0.12, head_width=0.05, head_length=0.03,
+                  fc='black', ec='black')
+
+    # Output box
+    output_rect = mpatches.FancyBboxPatch(
+        (0.1, 0.05), 0.8, 0.13,
+        boxstyle="round,pad=0.02",
+        facecolor='lightgreen', edgecolor='darkgreen', linewidth=2
+    )
+    ax_model.add_patch(output_rect)
+    ax_model.text(0.5, 0.115, 'Embeddings\n(B, 90, d_model)', fontsize=10,
+                 ha='center', va='center', fontweight='bold')
+
+    ax_model.set_xlim(0, 1)
+    ax_model.set_ylim(0, 1)
+
+    plt.suptitle('Atmospheric Data Cube & Feature Vector Structure',
+                 fontsize=16, fontweight='bold', y=0.98)
+
+    fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+    logger.info(f"Saved: {output_path}")
+    plt.close()
+
+
 def plot_time_series_overview(
     data: Dict[str, pd.DataFrame],
     output_path: Path,
@@ -541,6 +891,10 @@ def main():
 
     plot_time_series_overview(
         data, args.output_dir / 'atmos_time_series_overview.png'
+    )
+
+    plot_data_cube_structure(
+        data, args.output_dir / 'atmos_data_cube_structure.png'
     )
 
     logger.info(f"\nAll figures saved to: {args.output_dir}")

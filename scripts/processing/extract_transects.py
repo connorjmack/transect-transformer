@@ -111,46 +111,85 @@ BEACH_MOP_RANGES = {
 BEACH_ORDER = ['blacks', 'torrey', 'delmar', 'solana', 'sanelijo', 'encinitas']
 
 
-def get_unified_mop_list() -> List[int]:
-    """Get ordered list of all MOP IDs across all beaches.
-
-    Returns MOPs in geographic order (south to north), with duplicates removed
-    at beach boundaries.
+def get_unified_mop_range() -> Tuple[int, int]:
+    """Get the full MOP range covering all beaches.
 
     Returns:
-        List of MOP IDs in order
+        Tuple of (min_mop, max_mop) covering all beaches
     """
-    mop_set = set()
-    mop_list = []
-
+    all_mops = []
     for beach in BEACH_ORDER:
         mop_min, mop_max = BEACH_MOP_RANGES[beach]
-        for mop in range(mop_min, mop_max + 1):
-            if mop not in mop_set:
-                mop_set.add(mop)
-                mop_list.append(mop)
-
-    return mop_list
+        all_mops.extend([mop_min, mop_max])
+    return (min(all_mops), max(all_mops))
 
 
-def get_beach_slices(mop_list: List[int]) -> Dict[str, Tuple[int, int]]:
-    """Get slice indices for each beach within the unified MOP list.
+def get_transect_list_from_shapefile(
+    shapefile_path: Path,
+    transect_id_col: str = 'tr_id',
+) -> List[str]:
+    """Get ordered list of all transect IDs from shapefile filtered to study area.
+
+    Filters to transects within the defined MOP ranges for all beaches.
+    Transect IDs are like "MOP 520", "MOP 520_001", "MOP 595_003", etc.
 
     Args:
-        mop_list: Ordered list of MOP IDs
+        shapefile_path: Path to transect shapefile
+        transect_id_col: Column name for transect IDs
+
+    Returns:
+        List of transect ID strings in order
+    """
+    import geopandas as gpd
+
+    gdf = gpd.read_file(shapefile_path)
+
+    # Filter to transects within our MOP ranges
+    def is_in_study_area(transect_id: str) -> bool:
+        mop_id = parse_mop_id(transect_id)
+        if mop_id is None:
+            return False
+        for beach in BEACH_ORDER:
+            mop_min, mop_max = BEACH_MOP_RANGES[beach]
+            if mop_min <= mop_id <= mop_max:
+                return True
+        return False
+
+    mask = gdf[transect_id_col].apply(is_in_study_area)
+    filtered_gdf = gdf[mask].copy()
+
+    # Return transect IDs in their original order (geographic)
+    return filtered_gdf[transect_id_col].tolist()
+
+
+def get_beach_slices_from_transects(transect_ids: List[str]) -> Dict[str, Tuple[int, int]]:
+    """Get slice indices for each beach within the transect list.
+
+    Ensures no overlap between beaches - boundary MOPs are assigned to the
+    southern beach only (e.g., MOP 567 goes to blacks, not torrey).
+
+    Args:
+        transect_ids: Ordered list of transect ID strings
 
     Returns:
         Dictionary mapping beach name to (start_idx, end_idx) tuple
     """
-    mop_to_idx = {mop: idx for idx, mop in enumerate(mop_list)}
     beach_slices = {}
+    prev_end_idx = 0
 
     for beach in BEACH_ORDER:
         mop_min, mop_max = BEACH_MOP_RANGES[beach]
-        # Find indices for MOPs in this beach's range
-        indices = [mop_to_idx[mop] for mop in range(mop_min, mop_max + 1) if mop in mop_to_idx]
+        # Find indices for transects in this beach's MOP range
+        indices = []
+        for idx, tid in enumerate(transect_ids):
+            mop_id = parse_mop_id(tid)
+            if mop_id is not None and mop_min <= mop_id <= mop_max:
+                indices.append(idx)
         if indices:
-            beach_slices[beach] = (min(indices), max(indices) + 1)
+            start_idx = max(min(indices), prev_end_idx)  # Don't overlap with previous beach
+            end_idx = max(indices) + 1
+            beach_slices[beach] = (start_idx, end_idx)
+            prev_end_idx = end_idx
 
     return beach_slices
 
@@ -158,7 +197,8 @@ def get_beach_slices(mop_list: List[int]) -> Dict[str, Tuple[int, int]]:
 def parse_mop_id(transect_id: str) -> Optional[int]:
     """Parse MOP ID number from transect ID string.
 
-    Handles formats like "MOP 595", "MOP595", "595", etc.
+    Handles formats like "MOP 595", "MOP 595_001", "MOP595", "595", etc.
+    Extracts the main MOP number (ignoring sub-transect suffix).
 
     Args:
         transect_id: Transect ID string from shapefile
@@ -167,7 +207,7 @@ def parse_mop_id(transect_id: str) -> Optional[int]:
         Integer MOP ID or None if parsing fails
     """
     import re
-    # Try to extract number from string
+    # Try to extract the first number from string (the MOP ID, not sub-transect)
     match = re.search(r'(\d+)', str(transect_id))
     if match:
         return int(match.group(1))
@@ -585,7 +625,7 @@ def convert_flat_to_cube(
 
 def convert_flat_to_cube_unified(
     flat_transects: Dict[str, np.ndarray],
-    mop_list: List[int],
+    transect_list: List[str],
     epoch_files: List[Path],
     epoch_mop_ranges: List[Tuple[int, int]],
     n_points: int = 128,
@@ -602,9 +642,9 @@ def convert_flat_to_cube_unified(
             - points: (N_total, n_points, 12)
             - distances: (N_total, n_points)
             - metadata: (N_total, 12)
-            - transect_ids: (N_total,) - transect ID strings like "MOP 595"
+            - transect_ids: (N_total,) - transect ID strings like "MOP 595_001"
             - las_sources: (N_total,) - filenames indicating which epoch
-        mop_list: Pre-defined ordered list of MOP IDs (defines transect dimension)
+        transect_list: Pre-defined ordered list of transect IDs (defines transect dimension)
         epoch_files: Pre-defined ordered list of epoch filenames (defines epoch dimension)
         epoch_mop_ranges: List of (MOP1, MOP2) tuples for each epoch's survey coverage
         n_points: Number of points per transect
@@ -616,8 +656,8 @@ def convert_flat_to_cube_unified(
             - distances: (n_transects, n_epochs, n_points)
             - metadata: (n_transects, n_epochs, 12)
             - timestamps: (n_epochs,) ordinal days
-            - transect_ids: (n_transects,) MOP IDs as integers
-            - mop_ids: (n_transects,) same as transect_ids for clarity
+            - transect_ids: (n_transects,) transect ID strings
+            - mop_ids: (n_transects,) MOP ID integers (extracted from transect IDs)
             - epoch_files: (n_epochs,) original LAS filenames
             - epoch_dates: (n_epochs,) ISO date strings
             - epoch_mop_ranges: (n_epochs, 2) [MOP1, MOP2] per survey
@@ -633,13 +673,13 @@ def convert_flat_to_cube_unified(
     transect_ids = flat_transects['transect_ids']
     las_sources = flat_transects['las_sources']
 
-    n_transects = len(mop_list)
+    n_transects = len(transect_list)
     n_epochs = len(epoch_files)
     n_features = points.shape[2] if len(points) > 0 else 12
     n_meta = metadata.shape[1] if len(metadata) > 0 else 12
 
-    # Create mappings
-    mop_to_idx = {mop: idx for idx, mop in enumerate(mop_list)}
+    # Create mappings - use full transect ID strings
+    transect_to_idx = {tid: idx for idx, tid in enumerate(transect_list)}
     epoch_to_idx = {Path(f).name: idx for idx, f in enumerate(epoch_files)}
 
     # Parse dates for each epoch
@@ -662,13 +702,14 @@ def convert_flat_to_cube_unified(
     # Track per-epoch statistics
     epoch_valid_counts = np.zeros(n_epochs, dtype=int)
     skipped_epochs = []
+    unmatched_transects = 0
 
     # Fill cube with extracted data
     for i in range(len(points)):
-        # Parse MOP ID from transect ID string
-        tid_str = transect_ids[i]
-        mop_id = parse_mop_id(tid_str)
-        if mop_id is None or mop_id not in mop_to_idx:
+        # Use full transect ID string for matching
+        tid_str = str(transect_ids[i])
+        if tid_str not in transect_to_idx:
+            unmatched_transects += 1
             continue
 
         # Get epoch index
@@ -676,7 +717,7 @@ def convert_flat_to_cube_unified(
         if epoch_name not in epoch_to_idx:
             continue
 
-        t_idx = mop_to_idx[mop_id]
+        t_idx = transect_to_idx[tid_str]
         e_idx = epoch_to_idx[epoch_name]
 
         points_cube[t_idx, e_idx] = points[i]
@@ -684,6 +725,9 @@ def convert_flat_to_cube_unified(
         metadata_cube[t_idx, e_idx] = metadata[i]
         coverage_mask[t_idx, e_idx] = True
         epoch_valid_counts[e_idx] += 1
+
+    if unmatched_transects > 0:
+        logger.warning(f"Skipped {unmatched_transects} extracted transects not in transect list")
 
     # Check for epochs with too few transects
     for e_idx in range(n_epochs):
@@ -699,8 +743,11 @@ def convert_flat_to_cube_unified(
     # Create timestamps array (1D - same for all transects)
     timestamps = np.array([d.toordinal() for d in epoch_dates], dtype=np.int64)
 
-    # Get beach slices
-    beach_slices = get_beach_slices(mop_list)
+    # Get beach slices using full transect IDs
+    beach_slices = get_beach_slices_from_transects(transect_list)
+
+    # Extract MOP IDs for each transect
+    mop_ids = np.array([parse_mop_id(tid) or 0 for tid in transect_list], dtype=np.int32)
 
     # Calculate coverage statistics
     total_cells = n_transects * n_epochs
@@ -722,8 +769,8 @@ def convert_flat_to_cube_unified(
         'distances': distances_cube,
         'metadata': metadata_cube,
         'timestamps': timestamps,
-        'transect_ids': np.array(mop_list, dtype=np.int32),
-        'mop_ids': np.array(mop_list, dtype=np.int32),
+        'transect_ids': np.array(transect_list, dtype=object),
+        'mop_ids': mop_ids,
         'epoch_files': np.array([str(f) for f in epoch_files], dtype=object),
         'epoch_dates': np.array([d.isoformat() for d in epoch_dates], dtype=object),
         'epoch_mop_ranges': np.array(epoch_mop_ranges, dtype=np.int32),
@@ -1140,12 +1187,15 @@ def main():
 
     # In unified mode, print info about what we're doing
     if args.unified:
-        print("UNIFIED MODE: Creating cube with all beaches")
-        mop_list = get_unified_mop_list()
-        print(f"  MOP range: {min(mop_list)} - {max(mop_list)} ({len(mop_list)} unique MOPs)")
-        beach_slices = get_beach_slices(mop_list)
+        print("UNIFIED MODE: Creating cube with all beaches (10m transect spacing)")
+        mop_min, mop_max = get_unified_mop_range()
+        print(f"  MOP range: {mop_min} - {mop_max}")
+        # Get full transect list from shapefile
+        transect_list = get_transect_list_from_shapefile(args.transects, args.transect_id_col)
+        print(f"  Total transects: {len(transect_list)}")
+        beach_slices = get_beach_slices_from_transects(transect_list)
         for beach, (start, end) in beach_slices.items():
-            print(f"  {beach}: indices {start}-{end} ({end-start} MOPs)")
+            print(f"  {beach}: indices {start}-{end} ({end-start} transects)")
         print()
 
     # Validate inputs
@@ -1290,20 +1340,26 @@ def main():
 
     # In unified mode, filter transects to only include MOPs in our defined ranges
     if args.unified:
-        mop_list = get_unified_mop_list()
-        mop_set = set(mop_list)
-
-        # Filter transect_gdf to only include transects in our MOP list
+        # Filter transect_gdf to only include transects in study area MOP ranges
         original_count = len(transect_gdf)
 
-        def mop_in_list(transect_id):
+        def is_in_study_area(transect_id):
             mop_id = parse_mop_id(str(transect_id))
-            return mop_id is not None and mop_id in mop_set
+            if mop_id is None:
+                return False
+            for beach in BEACH_ORDER:
+                mop_min, mop_max = BEACH_MOP_RANGES[beach]
+                if mop_min <= mop_id <= mop_max:
+                    return True
+            return False
 
-        mask = transect_gdf[args.transect_id_col].apply(mop_in_list)
+        mask = transect_gdf[args.transect_id_col].apply(is_in_study_area)
         transect_gdf = transect_gdf[mask].copy()
 
-        print(f"Filtered transects: {original_count} -> {len(transect_gdf)} (MOPs in study area)")
+        # Get the transect list for cube conversion
+        transect_list = transect_gdf[args.transect_id_col].tolist()
+
+        print(f"Filtered transects: {original_count} -> {len(transect_gdf)} (in study area)")
 
     # Extract transects (flat format)
     try:
@@ -1336,10 +1392,10 @@ def main():
     # Convert to cube format
     if args.unified:
         print("Converting to UNIFIED cube format...")
-        mop_list = get_unified_mop_list()
+        # transect_list was already computed during filtering above
         cube = convert_flat_to_cube_unified(
             flat_transects,
-            mop_list=mop_list,
+            transect_list=transect_list,
             epoch_files=las_files,
             epoch_mop_ranges=epoch_mop_ranges,
             n_points=args.n_points,

@@ -124,7 +124,7 @@ def check_pdal_available() -> Tuple[bool, str]:
         return False, f"Error checking PDAL: {e}"
 
 
-def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False, force: bool = False) -> Tuple[bool, str]:
+def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False, force: bool = False, timeout: int = 3600) -> Tuple[bool, str]:
     """Convert a single LAS/LAZ file to COPC format using PDAL.
 
     The original file is NEVER modified. A new .copc.laz file is created.
@@ -134,6 +134,7 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False, forc
         copc_path: Path for output COPC file
         verbose: If True, show PDAL output
         force: If True, overwrite existing COPC file
+        timeout: Timeout in seconds per file (default: 3600 = 1 hour)
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -163,7 +164,7 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False, forc
             cmd,
             capture_output=True,
             text=True,
-            timeout=600  # 10 minute timeout per file
+            timeout=timeout
         )
 
         if result.returncode != 0:
@@ -199,7 +200,8 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False, forc
         # Clean up partial output
         if copc_path.exists():
             copc_path.unlink()
-        return False, "Conversion timed out (>10 min)"
+        timeout_min = timeout / 60
+        return False, f"Conversion timed out (>{timeout_min:.0f} min)"
     except FileNotFoundError:
         return False, "PDAL not found. Install with: conda install -c conda-forge pdal"
     except Exception as e:
@@ -209,17 +211,17 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False, forc
         return False, f"Error: {str(e)}"
 
 
-def convert_worker(args: Tuple[Path, Path, bool, bool]) -> Tuple[Path, bool, str]:
+def convert_worker(args: Tuple[Path, Path, bool, bool, int]) -> Tuple[Path, bool, str]:
     """Worker function for parallel conversion.
 
     Args:
-        args: Tuple of (las_path, copc_path, verbose, force)
+        args: Tuple of (las_path, copc_path, verbose, force, timeout)
 
     Returns:
         Tuple of (las_path, success, message)
     """
-    las_path, copc_path, verbose, force = args
-    success, message = convert_to_copc(las_path, copc_path, verbose, force)
+    las_path, copc_path, verbose, force, timeout = args
+    success, message = convert_to_copc(las_path, copc_path, verbose, force, timeout)
     return las_path, success, message
 
 
@@ -279,6 +281,13 @@ def main():
         '--force',
         action='store_true',
         help='Overwrite existing COPC files (mutually exclusive with --skip-existing)'
+    )
+
+    parser.add_argument(
+        '--timeout',
+        type=int,
+        default=3600,
+        help='Timeout per file in seconds (default: 3600 = 1 hour). Large files may need more.'
     )
 
     parser.add_argument(
@@ -478,7 +487,7 @@ def main():
             iterator = conversions
 
         for las_path, copc_path in iterator:
-            success, message = convert_to_copc(las_path, copc_path, args.verbose, args.force)
+            success, message = convert_to_copc(las_path, copc_path, args.verbose, args.force, args.timeout)
             if success:
                 success_count += 1
                 if args.verbose:
@@ -489,7 +498,7 @@ def main():
                 print(f"  FAILED: {las_path.name} - {message}")
     else:
         # Parallel processing
-        work_items = [(las, copc, args.verbose, args.force) for las, copc in conversions]
+        work_items = [(las, copc, args.verbose, args.force, args.timeout) for las, copc in conversions]
 
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
             futures = {

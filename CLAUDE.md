@@ -172,8 +172,17 @@ python scripts/processing/extract_transects.py \
     --target-os linux \
     --output data/processed/all_transects.npz
 
-# Download wave data
-python scripts/download_wave_data.py --buoy_id 100 --start_date 2023-01-01 --end_date 2024-01-01
+# Download CDIP wave data (all San Diego MOPs 520-764)
+python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --start-date 2017-01-01 --end-date 2025-12-31
+
+# Download wave data for specific beach
+python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --beach delmar
+
+# Download custom MOP range
+python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --mop-min 595 --mop-max 620
+
+# Verify existing CDIP downloads
+python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --verify-only
 
 # Download precipitation data
 python scripts/download_precip_data.py --region san_diego --start_date 2023-01-01 --end_date 2024-01-01
@@ -358,10 +367,98 @@ Survey CSV files use MOP1/MOP2 columns to indicate coverage range per survey.
   - Each transect has full temporal coverage (no missing timesteps expected)
   - `las_sources` array maps to timestamps for temporal encoding
 - **Feature normalization**: Intensity and RGB normalized to [0,1], classification as discrete codes
-- **Wave timesteps**: 6-hourly for capturing storm dynamics
-- **Precip timesteps**: Daily for antecedent moisture
+- **Wave timesteps**: 6-hourly for capturing storm dynamics (T_w = 360 for 90 days)
+- **Precip timesteps**: Daily for antecedent moisture (T_p = 90 for 90 days)
 - **Temporal alignment**: Environmental data aligned to most recent scan date; model learns from full temporal sequence
 - **Missing data**: Interpolate or flag - never silently fill with zeros
+
+### Wave Data (CDIP MOP System)
+
+**Overview**: Wave forcing data comes from CDIP's MOP (Monitoring and Prediction) system, providing nearshore wave predictions at 100m alongshore spacing at 10m water depth. Data is hourly from 2000-present and stored as NetCDF files.
+
+**Data Source**: CDIP THREDDS server
+- THREDDS catalog: https://thredds.cdip.ucsd.edu/thredds/catalog/cdip/model/MOP_alongshore/catalog.html
+- OPeNDAP access: Direct remote access for on-demand loading
+- Local caching: Pre-download files to `data/raw/cdip/` for training (recommended)
+
+**File Naming Convention**:
+- San Diego MOPs: `D0520_hindcast.nc`, `D0521_hindcast.nc`, ..., `D0764_hindcast.nc`
+- File size: ~10-100 MB per MOP (depends on date range)
+- Each file contains full time series for one MOP location
+
+**Features** (4 per timestep):
+1. **hs** - Significant wave height (m)
+2. **tp** - Peak period (s)
+3. **dp** - Peak direction (deg from N, 0=north, 90=east)
+4. **power** - Wave power flux (kW/m), computed as `(ρ*g²/64π) * Hs² * Tp`
+
+**Temporal Configuration**:
+- Lookback window: 90 days before scan date
+- Resampling: 6-hour intervals (captures storm dynamics)
+- Total timesteps: T_w = 360 for 90 days @ 6hr
+- Circular mean for direction during resampling (sin/cos components)
+
+**Integration Pattern**:
+```python
+from src.data.wave_loader import WaveLoader
+
+# Initialize loader with local CDIP directory
+loader = WaveLoader('data/raw/cdip/')
+
+# Get wave data for single scan (MOP 582, Dec 15, 2023)
+features, doy = loader.get_wave_for_scan(mop_id=582, scan_date='2023-12-15')
+print(features.shape)  # (360, 4) - 90 days @ 6hr
+print(doy.shape)       # (360,) - day-of-year for seasonality
+
+# Batch loading for multiple transects
+mop_ids = [582, 583, 584]
+scan_dates = ['2023-12-15', '2023-12-15', '2023-12-15']
+features, doy = loader.get_batch_wave(mop_ids, scan_dates)
+print(features.shape)  # (3, 360, 4)
+
+# Validate coverage before training
+coverage = loader.validate_coverage(mop_ids, scan_dates)
+print(f"Coverage: {coverage['coverage_pct']:.1f}%")
+```
+
+**Download Workflow**:
+1. **Batch download**: Use `download_cdip_data.py` to populate `data/raw/cdip/`
+2. **Verify coverage**: Check that >80% of MOPs have data
+3. **Train with local files**: WaveLoader reads from disk (fast, no network dependency)
+
+**Coverage Requirements**:
+- Minimum 80% coverage for training (safety-critical predictions need reliable forcing)
+- Missing data handling: Graceful degradation (log warning, return zeros)
+- Pre-training validation: Run `validate_coverage()` to check all beaches
+
+**Critical Implementation Details**:
+- **Fill value handling**: CDIP uses -999.99 for invalid data; these are filtered to NaN
+- **Circular mean resampling**: Direction uses sin/cos components, not simple averaging
+- **Temporal alignment**: Wave lookback is always 90 days BEFORE scan date (no future leakage)
+- **Cache strategy**: WaveData objects cached in memory (LRU eviction, default 50 MOPs)
+- **MOP-to-site-label mapping**: Files may use D0582, D582, or D582 formats; loader tries all
+
+**Expected Tensor Shapes**:
+- Input to model: `(B, T_w, 4)` where B = batch size, T_w = 360
+- Day-of-year: `(B, T_w)` for seasonality embedding
+- Feature order: [hs, tp, dp, power] (always in this order)
+
+**Data Organization**:
+```
+data/
+├── raw/
+│   ├── cdip/                  # Wave data (NetCDF files)
+│   │   ├── D0520_hindcast.nc  # Black's Beach
+│   │   ├── D0582_hindcast.nc  # Torrey Pines
+│   │   ├── D0595_hindcast.nc  # Del Mar
+│   │   └── ...
+│   ├── prism/                 # Raw PRISM climate data
+│   └── master_list.csv        # LiDAR survey metadata
+├── processed/
+│   ├── atmospheric/           # Computed atmospheric features (parquet)
+│   ├── delmar.npz            # Transect cubes
+│   └── ...
+```
 
 ### Attention Interpretation
 Multiple attention mechanisms reveal different physical attributions:

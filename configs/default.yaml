@@ -30,9 +30,16 @@ model:
 data:
   n_transect_points: 128
 
-  # Wave data
+  # Wave data (CDIP MOP alongshore predictions)
+  wave_data_dir: data/raw/cdip
   wave_history_days: 90
   wave_timestep_hours: 6
+  n_wave_features: 4
+  wave_feature_names:
+    - hs          # Significant wave height (m)
+    - tp          # Peak period (s)
+    - dp          # Peak direction (deg from N, 0=north, 90=east)
+    - power       # Wave power flux (kW/m)
 
   # Atmospheric data (precipitation + temperature)
   atmos_history_days: 90

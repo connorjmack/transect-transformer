@@ -33,6 +33,7 @@ import numpy as np
 
 # Suppress HDF5 error messages for cleaner output
 os.environ['HDF5_DISABLE_VERSION_CHECK'] = '1'
+os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'  # Disable file locking for THREDDS access
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -156,22 +157,6 @@ def try_multiple_site_labels(
     return False, None
 
 
-class SuppressStderr:
-    """Context manager to suppress stderr at the file descriptor level.
-
-    This is needed to suppress HDF5 error messages which are printed from C code.
-    """
-    def __enter__(self):
-        self.null_fd = os.open(os.devnull, os.O_RDWR)
-        self.save_fd = os.dup(2)
-        os.dup2(self.null_fd, 2)
-
-    def __exit__(self, *_):
-        os.dup2(self.save_fd, 2)
-        os.close(self.null_fd)
-        os.close(self.save_fd)
-
-
 def download_single_mop(
     mop_id: int,
     output_dir: Path,
@@ -191,7 +176,7 @@ def download_single_mop(
     Returns:
         Tuple of (mop_id, success: bool, error_message: Optional[str])
     """
-    # Check if file already exists
+    # Check if file already exists and is valid (>1MB)
     possible_files = [
         output_dir / f"D{mop_id:04d}_hindcast.nc",
         output_dir / f"D{mop_id:03d}_hindcast.nc",
@@ -200,19 +185,22 @@ def download_single_mop(
 
     if skip_existing:
         for file_path in possible_files:
-            if file_path.exists():
-                logger.info(f"⊳ MOP {mop_id} already exists, skipping")
+            if file_path.exists() and file_path.stat().st_size > 1_000_000:
+                # File exists and is > 1MB (valid)
+                logger.debug(f"⊳ MOP {mop_id} already exists, skipping")
                 return mop_id, True, None
+            elif file_path.exists():
+                # File exists but is too small (corrupt) - delete it
+                logger.debug(f"Removing corrupt file: {file_path}")
+                file_path.unlink()
 
     # Initialize loader with cache directory
     loader = CDIPWaveLoader(cache_dir=output_dir)
 
     # Try to download with multiple site label formats
-    # Suppress stderr to hide HDF5 error messages (C-level suppression)
-    with SuppressStderr():
-        success, site_label = try_multiple_site_labels(
-            loader, mop_id, start_date, end_date
-        )
+    success, site_label = try_multiple_site_labels(
+        loader, mop_id, start_date, end_date
+    )
 
     if success:
         return mop_id, True, None

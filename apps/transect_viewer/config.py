@@ -12,6 +12,10 @@ SUPPORTED_DATA_TYPES = {
     'precipitation': False,  # Future: precip time series
 }
 
+# Default forcing data locations
+WAVE_DATA_DIR = "data/raw/cdip"
+ATMOS_DATA_DIR = "data/processed/atmospheric"
+
 # View mode options
 VIEW_MODES = [
     "Data Dashboard",
@@ -19,6 +23,7 @@ VIEW_MODES = [
     "Temporal Slider",
     "Transect Evolution",
     "Cross-Transect View",
+    "Forcing Timeseries",
 ]
 
 # Color schemes for features

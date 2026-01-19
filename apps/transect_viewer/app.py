@@ -24,6 +24,7 @@ from apps.transect_viewer.components.transect_inspector import render_inspector
 from apps.transect_viewer.components.temporal_slider import render_temporal_slider
 from apps.transect_viewer.components.evolution_view import render_evolution
 from apps.transect_viewer.components.cross_transect_view import render_cross_transect
+from apps.transect_viewer.components.forcing_timeseries import render_forcing_timeseries
 
 
 def init_session_state():
@@ -99,6 +100,8 @@ def main():
         render_evolution()
     elif view_mode == "Cross-Transect View":
         render_cross_transect()
+    elif view_mode == "Forcing Timeseries":
+        render_forcing_timeseries()
     else:
         st.error(f"Unknown view mode: {view_mode}")
 

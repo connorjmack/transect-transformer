@@ -239,6 +239,20 @@ def _render_view_options(view_mode: str):
         if not is_cube or dims['n_epochs'] < 2:
             st.sidebar.warning("Temporal data requires cube format with multiple epochs")
 
+    elif view_mode == "Forcing Timeseries":
+        # Transect selector for forcing view
+        transect_ids = get_all_transect_ids(data)
+
+        selected_id = st.sidebar.selectbox(
+            "Transect ID",
+            transect_ids,
+            index=transect_ids.index(st.session_state.selected_transect_id)
+            if st.session_state.selected_transect_id in transect_ids
+            else 0,
+            key="forcing_transect_id",
+        )
+        st.session_state.selected_transect_id = selected_id
+
     elif view_mode == "Cross-Transect View":
         # Epoch selector for cross-transect view
         if is_cube and dims['n_epochs'] > 1:

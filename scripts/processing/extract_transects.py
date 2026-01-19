@@ -43,13 +43,12 @@ Usage:
         --output data/processed/all_transects.npz
 
     # From survey CSV with LAZ requirement (errors if LAZ files don't exist)
+    # Priority: .copc.laz (10-100x faster) > .laz (5-10x faster) > .las (fallback)
     python scripts/processing/extract_transects.py \\
         --transects data/mops/transects_10m/transect_lines.shp \\
         --survey-csv data/raw/master_list.csv \\
         --prefer-laz \\
         --output data/processed/all_transects.npz
-
-    # Script will check for COPC spatial indexing and report 10-100x speedup if available
 
     # Force Linux paths (e.g., when CSV has Mac paths but running on Linux)
     python scripts/processing/extract_transects.py \\
@@ -216,7 +215,12 @@ def substitute_copc_files(las_files: List[Path], verbose: bool = True) -> Tuple[
 
 
 def substitute_laz_files(las_files: List[Path], verbose: bool = True, require: bool = False) -> Tuple[List[Path], int, int]:
-    """Substitute LAS files with LAZ versions where available.
+    """Substitute LAS files with LAZ/COPC.LAZ versions where available.
+
+    Priority order:
+    1. .copc.laz (best: compressed + spatial index)
+    2. .laz (good: compressed)
+    3. .las (fallback: uncompressed)
 
     Args:
         las_files: List of LAS/LAZ file paths
@@ -231,7 +235,15 @@ def substitute_laz_files(las_files: List[Path], verbose: bool = True, require: b
     copc_count = 0
 
     for las_path in las_files:
-        # Skip if already a LAZ file
+        # Already a COPC.LAZ file - perfect!
+        if las_path.name.endswith('.copc.laz'):
+            result.append(las_path)
+            copc_count += 1
+            if verbose:
+                logger.debug(f"Using COPC.LAZ: {las_path.name}")
+            continue
+
+        # Already a LAZ file (check if COPC)
         if las_path.suffix.lower() == '.laz':
             result.append(las_path)
             # Check if it's COPC
@@ -241,8 +253,19 @@ def substitute_laz_files(las_files: List[Path], verbose: bool = True, require: b
                     logger.debug(f"LAZ file has COPC index: {las_path.name}")
             continue
 
-        # Try substituting .las with .laz
+        # Try substituting .las with .copc.laz first (best option)
         if las_path.suffix.lower() == '.las':
+            # Try .copc.laz first
+            copc_laz_path = las_path.with_suffix('.copc.laz')
+            if copc_laz_path.exists():
+                result.append(copc_laz_path)
+                substituted += 1
+                copc_count += 1
+                if verbose:
+                    logger.debug(f"Using COPC.LAZ: {copc_laz_path.name} (10-100x faster!)")
+                continue
+
+            # Fall back to .laz
             laz_path = las_path.with_suffix('.laz')
             if laz_path.exists():
                 result.append(laz_path)
@@ -254,15 +277,18 @@ def substitute_laz_files(las_files: List[Path], verbose: bool = True, require: b
                         logger.debug(f"Using LAZ with COPC index: {laz_path.name}")
                 elif verbose:
                     logger.debug(f"Using LAZ: {laz_path.name} (no COPC index)")
+                continue
+
+            # No LAZ version found
+            if require:
+                raise FileNotFoundError(
+                    f"LAZ file required but not found.\n"
+                    f"Tried: {copc_laz_path}\n"
+                    f"Tried: {laz_path}\n"
+                    f"Original LAS path: {las_path}"
+                )
             else:
-                if require:
-                    raise FileNotFoundError(
-                        f"LAZ file required but not found: {laz_path}\n"
-                        f"Original LAS path: {las_path}\n"
-                        f"Use --prefer-laz without --require-laz to fall back to LAS files."
-                    )
-                else:
-                    result.append(las_path)
+                result.append(las_path)
         else:
             result.append(las_path)
 

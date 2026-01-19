@@ -199,16 +199,17 @@ python scripts/processing/extract_transects.py \
     --target-os linux \
     --output data/processed/all_transects.npz
 
-# Use LAZ files instead of LAS (faster loading, smaller files)
-# REQUIRES .laz versions to exist (errors if not found):
+# Use LAZ/COPC.LAZ files instead of LAS (faster loading, smaller files)
+# REQUIRES .laz or .copc.laz versions to exist (errors if not found)
+# Priority: .copc.laz (best) > .laz (good) > .las (fallback)
 python scripts/processing/extract_transects.py \
     --transects data/mops/transects_10m/transect_lines.shp \
     --survey-csv data/raw/master_list.csv \
     --prefer-laz \
     --output data/processed/all_transects.npz
 
-# The script will also check for COPC spatial indexing in LAZ files
-# and report faster loading capabilities (10-100x speedup)
+# COPC.LAZ files provide 10-100x faster loading via spatial indexing
+# Script automatically detects and uses them
 
 # Download CDIP wave data (all San Diego MOPs 520-764)
 python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --start-date 2017-01-01 --end-date 2025-12-31

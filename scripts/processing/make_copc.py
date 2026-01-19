@@ -124,7 +124,7 @@ def check_pdal_available() -> Tuple[bool, str]:
         return False, f"Error checking PDAL: {e}"
 
 
-def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False) -> Tuple[bool, str]:
+def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False, force: bool = False) -> Tuple[bool, str]:
     """Convert a single LAS/LAZ file to COPC format using PDAL.
 
     The original file is NEVER modified. A new .copc.laz file is created.
@@ -133,6 +133,7 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False) -> T
         las_path: Path to input LAS/LAZ file
         copc_path: Path for output COPC file
         verbose: If True, show PDAL output
+        force: If True, overwrite existing COPC file
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -141,7 +142,11 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False) -> T
         return False, f"Input file not found: {las_path}"
 
     if copc_path.exists():
-        return False, f"Output already exists: {copc_path}"
+        if force:
+            # Remove existing COPC file to replace it
+            copc_path.unlink()
+        else:
+            return False, f"Output already exists: {copc_path}"
 
     try:
         # Build PDAL pipeline command
@@ -204,17 +209,17 @@ def convert_to_copc(las_path: Path, copc_path: Path, verbose: bool = False) -> T
         return False, f"Error: {str(e)}"
 
 
-def convert_worker(args: Tuple[Path, Path, bool]) -> Tuple[Path, bool, str]:
+def convert_worker(args: Tuple[Path, Path, bool, bool]) -> Tuple[Path, bool, str]:
     """Worker function for parallel conversion.
 
     Args:
-        args: Tuple of (las_path, copc_path, verbose)
+        args: Tuple of (las_path, copc_path, verbose, force)
 
     Returns:
         Tuple of (las_path, success, message)
     """
-    las_path, copc_path, verbose = args
-    success, message = convert_to_copc(las_path, copc_path, verbose)
+    las_path, copc_path, verbose, force = args
+    success, message = convert_to_copc(las_path, copc_path, verbose, force)
     return las_path, success, message
 
 
@@ -271,6 +276,12 @@ def main():
     )
 
     parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Overwrite existing COPC files (mutually exclusive with --skip-existing)'
+    )
+
+    parser.add_argument(
         '--start',
         type=int,
         default=0,
@@ -313,6 +324,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Validate mutually exclusive flags
+    if args.skip_existing and args.force:
+        print("Error: --skip-existing and --force are mutually exclusive")
+        return 1
 
     # Check PDAL availability first
     pdal_ok, pdal_msg = check_pdal_available()
@@ -462,7 +478,7 @@ def main():
             iterator = conversions
 
         for las_path, copc_path in iterator:
-            success, message = convert_to_copc(las_path, copc_path, args.verbose)
+            success, message = convert_to_copc(las_path, copc_path, args.verbose, args.force)
             if success:
                 success_count += 1
                 if args.verbose:
@@ -473,7 +489,7 @@ def main():
                 print(f"  FAILED: {las_path.name} - {message}")
     else:
         # Parallel processing
-        work_items = [(las, copc, args.verbose) for las, copc in conversions]
+        work_items = [(las, copc, args.verbose, args.force) for las, copc in conversions]
 
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
             futures = {

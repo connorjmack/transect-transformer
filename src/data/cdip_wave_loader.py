@@ -59,6 +59,9 @@ class WaveData:
             doy: (T_w,) array of day-of-year for temporal encoding
         """
         import pandas as pd
+
+        # Number of timesteps expected for the requested window
+        expected_steps = int((history_days * 24) / resample_hours)
         
         # Create time index
         times = pd.to_datetime(self.time)
@@ -69,8 +72,8 @@ class WaveData:
         else:
             ref_dt = pd.Timestamp(reference_date)
             
-        # Filter to history window
-        start_dt = ref_dt - pd.Timedelta(days=history_days)
+        # Filter to history window aligned to expected steps (inclusive)
+        start_dt = ref_dt - pd.Timedelta(hours=(expected_steps - 1) * resample_hours)
         mask = (times >= start_dt) & (times <= ref_dt)
         
         if not mask.any():
@@ -90,7 +93,20 @@ class WaveData:
         
         # Resample
         resample_rule = f'{resample_hours}h'
-        df_resampled = df[['hs', 'tp', 'power', 'dp_sin', 'dp_cos']].resample(resample_rule).mean()
+        df_resampled = (
+            df[['hs', 'tp', 'power', 'dp_sin', 'dp_cos']]
+            .resample(resample_rule, origin=start_dt)
+            .mean()
+        )
+
+        # Align to the exact expected time index and fill small gaps
+        expected_index = pd.date_range(
+            start=start_dt,
+            periods=expected_steps,
+            freq=resample_rule,
+        )
+        df_resampled = df_resampled.reindex(expected_index)
+        df_resampled = df_resampled.interpolate(method='time', limit_direction='both')
         
         # Compute circular mean direction
         df_resampled['dp'] = np.degrees(np.arctan2(
@@ -98,8 +114,15 @@ class WaveData:
             df_resampled['dp_cos']
         )) % 360
         
-        # Drop helper columns and NaN rows
-        df_resampled = df_resampled[['hs', 'tp', 'dp', 'power']].dropna()
+        # Drop helper columns and ensure we have the expected length
+        df_resampled = df_resampled[['hs', 'tp', 'dp', 'power']]
+
+        if df_resampled.isnull().any().any():
+            raise ValueError("Missing data after resampling")
+        if len(df_resampled) != expected_steps:
+            raise ValueError(
+                f"Unexpected resampled length {len(df_resampled)} (expected {expected_steps})"
+            )
         
         # Convert to arrays
         features = df_resampled.values.astype(np.float32)

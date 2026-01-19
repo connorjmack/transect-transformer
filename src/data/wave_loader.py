@@ -207,10 +207,10 @@ class WaveLoader:
             T_w = int((self.lookback_days * 24) / self.resample_hours)
             features = np.zeros((T_w, self.n_features), dtype=np.float32)
 
-            # Generate day-of-year for time window
-            start_date = scan_date - timedelta(days=self.lookback_days - 1)
+            # Generate day-of-year for time window aligned to expected steps
+            start_date = scan_date - timedelta(hours=(T_w - 1) * self.resample_hours)
             dates = pd.date_range(start_date, scan_date, freq=f'{self.resample_hours}h')
-            doy = dates.dayofyear.values[:T_w].astype(np.int32)
+            doy = dates.dayofyear.values.astype(np.int32)
 
             return features, doy
 
@@ -230,9 +230,9 @@ class WaveLoader:
             T_w = int((self.lookback_days * 24) / self.resample_hours)
             features = np.zeros((T_w, self.n_features), dtype=np.float32)
 
-            start_date = scan_date - timedelta(days=self.lookback_days - 1)
+            start_date = scan_date - timedelta(hours=(T_w - 1) * self.resample_hours)
             dates = pd.date_range(start_date, scan_date, freq=f'{self.resample_hours}h')
-            doy = dates.dayofyear.values[:T_w].astype(np.int32)
+            doy = dates.dayofyear.values.astype(np.int32)
 
             return features, doy
 

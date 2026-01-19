@@ -42,12 +42,14 @@ Usage:
         --survey-csv data/raw/master_list.csv \\
         --output data/processed/all_transects.npz
 
-    # From survey CSV with automatic LAZ substitution (if LAZ files exist)
+    # From survey CSV with LAZ requirement (errors if LAZ files don't exist)
     python scripts/processing/extract_transects.py \\
         --transects data/mops/transects_10m/transect_lines.shp \\
         --survey-csv data/raw/master_list.csv \\
         --prefer-laz \\
         --output data/processed/all_transects.npz
+
+    # Script will check for COPC spatial indexing and report 10-100x speedup if available
 
     # Force Linux paths (e.g., when CSV has Mac paths but running on Linux)
     python scripts/processing/extract_transects.py \\
@@ -213,23 +215,30 @@ def substitute_copc_files(las_files: List[Path], verbose: bool = True) -> Tuple[
     return result, substituted
 
 
-def substitute_laz_files(las_files: List[Path], verbose: bool = True) -> Tuple[List[Path], int]:
+def substitute_laz_files(las_files: List[Path], verbose: bool = True, require: bool = False) -> Tuple[List[Path], int, int]:
     """Substitute LAS files with LAZ versions where available.
 
     Args:
         las_files: List of LAS/LAZ file paths
         verbose: If True, log substitutions
+        require: If True, raise error if LAZ version doesn't exist
 
     Returns:
-        Tuple of (updated file list, number of substitutions made)
+        Tuple of (updated file list, number of substitutions made, number of COPC files found)
     """
     result = []
     substituted = 0
+    copc_count = 0
 
     for las_path in las_files:
         # Skip if already a LAZ file
         if las_path.suffix.lower() == '.laz':
             result.append(las_path)
+            # Check if it's COPC
+            if is_copc_file(las_path):
+                copc_count += 1
+                if verbose:
+                    logger.debug(f"LAZ file has COPC index: {las_path.name}")
             continue
 
         # Try substituting .las with .laz
@@ -238,14 +247,26 @@ def substitute_laz_files(las_files: List[Path], verbose: bool = True) -> Tuple[L
             if laz_path.exists():
                 result.append(laz_path)
                 substituted += 1
-                if verbose:
-                    logger.debug(f"Using LAZ: {laz_path.name} instead of {las_path.name}")
+                # Check if it's COPC
+                if is_copc_file(laz_path):
+                    copc_count += 1
+                    if verbose:
+                        logger.debug(f"Using LAZ with COPC index: {laz_path.name}")
+                elif verbose:
+                    logger.debug(f"Using LAZ: {laz_path.name} (no COPC index)")
             else:
-                result.append(las_path)
+                if require:
+                    raise FileNotFoundError(
+                        f"LAZ file required but not found: {laz_path}\n"
+                        f"Original LAS path: {las_path}\n"
+                        f"Use --prefer-laz without --require-laz to fall back to LAS files."
+                    )
+                else:
+                    result.append(las_path)
         else:
             result.append(las_path)
 
-    return result, substituted
+    return result, substituted, copc_count
 
 
 def get_current_os() -> str:
@@ -828,7 +849,7 @@ def main():
     parser.add_argument(
         "--prefer-laz",
         action="store_true",
-        help="Automatically use .laz files instead of .las when available (faster loading, smaller files)",
+        help="REQUIRE .laz files instead of .las (faster loading, smaller files). Will error if LAZ not found.",
     )
 
     args = parser.parse_args()
@@ -907,11 +928,17 @@ def main():
 
     # Substitute LAZ files if --prefer-laz is set
     if args.prefer_laz:
-        las_files, n_laz = substitute_laz_files(las_files, verbose=True)
+        las_files, n_laz, n_copc = substitute_laz_files(las_files, verbose=True, require=True)
         if n_laz > 0:
-            logger.info(f"Substituted {n_laz} files with LAZ versions (faster loading, smaller files)")
+            logger.info(f"✓ Substituted {n_laz} files with LAZ versions (faster loading, smaller files)")
+            if n_copc > 0:
+                logger.info(f"✓ Found {n_copc} LAZ files with COPC spatial index (10-100x faster loading!)")
+            else:
+                logger.info("  Note: LAZ files do not have COPC index. Consider creating COPC versions for even faster loading.")
         else:
-            logger.info("No LAZ versions found - using original LAS files")
+            logger.info("All files already LAZ format")
+            if n_copc > 0:
+                logger.info(f"✓ {n_copc} files have COPC spatial index (10-100x faster loading!)")
 
     # Substitute COPC files if --prefer-copc is set
     if args.prefer_copc:

@@ -245,3 +245,33 @@ class KMLParser:
 
         np.savez_compressed(output_path, **save_dict)
         logger.info(f"Saved {len(transects['origins'])} transects to {output_path}")
+
+
+def parse_kml(
+    kml_path: Union[str, Path],
+    utm_zone: int = 11,
+    hemisphere: str = 'N',
+) -> Dict[str, np.ndarray]:
+    """Convenience function to parse a KML file containing transect lines.
+
+    This is a wrapper around KMLParser for simple use cases.
+
+    Args:
+        kml_path: Path to KML file
+        utm_zone: UTM zone for coordinate projection (default: 11 for San Diego)
+        hemisphere: 'N' or 'S' for northern/southern hemisphere
+
+    Returns:
+        Dictionary containing:
+            - 'origins': (N, 3) array of transect start points (x, y, z)
+            - 'endpoints': (N, 3) array of transect end points (x, y, z)
+            - 'normals': (N, 2) array of shore-normal unit vectors
+            - 'names': list of N transect names
+            - 'lengths': (N,) array of transect lengths in meters
+
+    Example:
+        >>> transects = parse_kml("MOPs-SD.kml", utm_zone=11)
+        >>> print(f"Extracted {len(transects['origins'])} transect lines")
+    """
+    parser = KMLParser(utm_zone=utm_zone, hemisphere=hemisphere)
+    return parser.parse(kml_path)

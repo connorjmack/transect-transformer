@@ -56,11 +56,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--buffer",
         type=float,
-        default=0.05,
+        default=0.15,
         help="Fractional padding around the geometry bounds for plotting.",
     )
     parser.add_argument(
-        "--dpi", type=int, default=300, help="Resolution for the saved figure."
+        "--dpi", type=int, default=400, help="Resolution for the saved figure."
     )
     parser.add_argument(
         "--title",
@@ -155,15 +155,18 @@ def calculate_optimal_rotation(gdf: gpd.GeoDataFrame) -> float:
     
     rotation = -angle_deg
     
-    # Ensure water is at the bottom. 
-    # Rotate the average transect vector and check if its Y component is negative.
+    # Ensure water is at the bottom.
+    # Rotate the average transect vector and check if its Y component is positive (pointing up = ocean up).
+    # If ocean is pointing up, flip by 180 degrees to put it at the bottom.
     if vectors:
         avg_v = np.mean(vectors, axis=0)
         rad = np.radians(rotation)
         # Rotation matrix (standard CCW)
         rot_m = np.array([[np.cos(rad), -np.sin(rad)], [np.sin(rad), np.cos(rad)]])
         rotated_v = rot_m @ avg_v
-        if rotated_v[1] > 0:
+        # Transects go land->sea, so if Y < 0, ocean is at bottom (correct).
+        # If Y > 0, ocean is at top, so we do NOT flip. Flip when Y < 0 to correct.
+        if rotated_v[1] < 0:
             rotation += 180
             
     return rotation
@@ -235,7 +238,7 @@ def add_scale_bar(ax: plt.Axes, location=(0.92, 0.05)) -> None:
     ax.text(right_x + bar_length_m * 0.05, anchor_y + bar_height/2, "m", ha="left", va="center", fontsize=10, fontweight="bold", zorder=22).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
 
 
-def calculate_zoom_level(minx: float, miny: float, maxx: float, maxy: float, max_pixels: int = 16000) -> int:
+def calculate_zoom_level(minx: float, miny: float, maxx: float, maxy: float, max_pixels: int = 8000) -> int:
     """Calculate zoom level to fit bounds within max_pixels for Web Mercator (EPSG:3857)."""
     width = maxx - minx
     height = maxy - miny
@@ -295,13 +298,17 @@ def add_satellite_basemap(
 
     if zoom is None:
         try:
-            zoom_guess = calculate_zoom_level(minx, miny, maxx, maxy, max_pixels=16000)
+            zoom_guess = calculate_zoom_level(minx, miny, maxx, maxy, max_pixels=8000)
         except Exception:
             zoom_guess = None
     else:
         zoom_guess = zoom
 
-    img, ext = ctx.bounds2img(minx, miny, maxx, maxy, source=ctx.providers.Esri.WorldImagery, ll=False)
+    # Pass zoom level to get higher resolution tiles for publication quality
+    fetch_kwargs = {"source": ctx.providers.Esri.WorldImagery, "ll": False}
+    if zoom_guess is not None:
+        fetch_kwargs["zoom"] = zoom_guess
+    img, ext = ctx.bounds2img(minx, miny, maxx, maxy, **fetch_kwargs)
     actual_bounds = (ext[0], ext[1], ext[2], ext[3])
 
     if rotation_angle != 0:

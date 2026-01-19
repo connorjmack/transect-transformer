@@ -16,6 +16,13 @@ transect-transformer/
 │   ├── plan.md                    # Implementation phases and roadmap
 │   ├── todo.md                    # Current tasks and progress
 │   └── DATA_REQUIREMENTS.md       # Data collection requirements
+├── apps/                          # Interactive applications
+│   └── transect_viewer/           # Streamlit transect visualization app
+│       ├── app.py                 # Main entry point
+│       ├── config.py              # App configuration
+│       ├── components/            # UI components (sidebar, views)
+│       ├── utils/                 # Data loading, validation
+│       └── plots/                 # Plotting functions
 ├── src/
 │   ├── data/
 │   │   ├── parsers/               # I/O logic for various formats
@@ -115,6 +122,21 @@ python scripts/download_precip_data.py --region san_diego --start_date 2023-01-0
 # Full preprocessing pipeline
 python scripts/prepare_dataset.py --lidar_dir data/raw/lidar/ --output data/processed/ --spacing_m 10
 ```
+
+### Interactive Apps
+```bash
+# Launch transect viewer for visual inspection of NPZ files
+streamlit run apps/transect_viewer/app.py
+
+# With specific port
+streamlit run apps/transect_viewer/app.py --server.port 8501
+```
+
+The transect viewer supports:
+- **Data Dashboard**: Overview statistics, feature distributions, quality checks
+- **Single Transect Inspector**: Detailed view of individual transects with all 12 features
+- **Transect Evolution**: Compare transects across time epochs (multi-file)
+- **Cross-Transect View**: Spatial analysis and multi-transect comparison
 
 ## Architecture Overview
 

@@ -29,6 +29,7 @@ wandb>=0.16
 matplotlib>=3.7
 seaborn>=0.13
 plotly>=5.18
+streamlit>=1.30
 
 # ML utilities
 scikit-learn>=1.3

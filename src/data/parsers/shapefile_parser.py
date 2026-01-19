@@ -170,3 +170,31 @@ class ShapefileParser:
 
         np.savez_compressed(output_path, **save_dict)
         logger.info(f"Saved {len(transects['origins'])} transects to {output_path}")
+
+
+def parse_shapefile(
+    shp_path: Union[str, Path],
+    target_crs: str = "EPSG:26911",
+) -> Dict[str, np.ndarray]:
+    """Convenience function to parse a shapefile containing transect lines.
+
+    This is a wrapper around ShapefileParser for simple use cases.
+
+    Args:
+        shp_path: Path to shapefile
+        target_crs: Target coordinate reference system (default: UTM 11N)
+
+    Returns:
+        Dictionary containing:
+            - 'origins': (N, 3) array of transect start points (x, y, z)
+            - 'endpoints': (N, 3) array of transect end points (x, y, z)
+            - 'normals': (N, 2) array of shore-normal unit vectors
+            - 'names': list of N transect names
+            - 'lengths': (N,) array of transect lengths in meters
+
+    Example:
+        >>> transects = parse_shapefile("DelMarTransects.shp")
+        >>> print(f"Extracted {len(transects['origins'])} transect lines")
+    """
+    parser = ShapefileParser(target_crs=target_crs)
+    return parser.parse(shp_path)

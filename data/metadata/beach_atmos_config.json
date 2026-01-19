@@ -1,0 +1,135 @@
+{
+  "description": "Beach atmospheric data configuration for CliffCast",
+  "data_source": "PRISM_4km",
+  "data_source_url": "https://prism.oregonstate.edu",
+  "validation_source": "CIMIS",
+  "lookback_days": 90,
+  "beaches": {
+    "blacks": {
+      "name": "Black's Beach",
+      "mop_range": [520, 567],
+      "precip_coords": {
+        "lat": 32.885,
+        "lon": -117.255
+      },
+      "notes": "Steep cliffs, remote access"
+    },
+    "torrey": {
+      "name": "Torrey Pines State Beach",
+      "mop_range": [567, 581],
+      "precip_coords": {
+        "lat": 32.920,
+        "lon": -117.260
+      },
+      "notes": "State park, protected area"
+    },
+    "delmar": {
+      "name": "Del Mar",
+      "mop_range": [595, 620],
+      "precip_coords": {
+        "lat": 32.960,
+        "lon": -117.265
+      },
+      "notes": "City beaches, moderate cliffs"
+    },
+    "solana": {
+      "name": "Solana Beach",
+      "mop_range": [637, 666],
+      "precip_coords": {
+        "lat": 32.990,
+        "lon": -117.270
+      },
+      "notes": "Active erosion, seawalls present"
+    },
+    "sanelijo": {
+      "name": "San Elijo State Beach",
+      "mop_range": [683, 708],
+      "precip_coords": {
+        "lat": 33.025,
+        "lon": -117.280
+      },
+      "notes": "State beach, variable cliff heights"
+    },
+    "encinitas": {
+      "name": "Encinitas / Moonlight Beach",
+      "mop_range": [708, 764],
+      "precip_coords": {
+        "lat": 33.055,
+        "lon": -117.285
+      },
+      "notes": "Longest section, includes Leucadia"
+    }
+  },
+  "feature_groups": {
+    "raw_measurements": [
+      "precip_mm",
+      "temp_mean_c",
+      "temp_min_c",
+      "temp_max_c",
+      "dewpoint_c"
+    ],
+    "cumulative_precipitation": [
+      "precip_7d",
+      "precip_30d",
+      "precip_60d",
+      "precip_90d"
+    ],
+    "antecedent_conditions": [
+      "api",
+      "days_since_rain",
+      "consecutive_dry_days"
+    ],
+    "intensity_metrics": [
+      "rain_day_flag",
+      "intensity_class",
+      "max_precip_7d",
+      "max_precip_30d"
+    ],
+    "wetting_drying_cycles": [
+      "wet_dry_cycles_30d",
+      "wet_dry_cycles_90d"
+    ],
+    "evaporative_demand": [
+      "vpd",
+      "vpd_7d_mean"
+    ],
+    "freeze_thaw": [
+      "freeze_flag",
+      "marginal_freeze_flag",
+      "freeze_thaw_cycles_30d",
+      "freeze_thaw_cycles_season"
+    ]
+  },
+  "feature_descriptions": {
+    "precip_mm": "Daily precipitation in millimeters",
+    "temp_mean_c": "Daily mean temperature in Celsius",
+    "temp_min_c": "Daily minimum temperature in Celsius",
+    "temp_max_c": "Daily maximum temperature in Celsius",
+    "dewpoint_c": "Daily dewpoint temperature in Celsius",
+    "precip_7d": "Rolling 7-day precipitation sum",
+    "precip_30d": "Rolling 30-day precipitation sum",
+    "precip_60d": "Rolling 60-day precipitation sum",
+    "precip_90d": "Rolling 90-day precipitation sum",
+    "api": "Antecedent Precipitation Index (exponential decay k=0.9)",
+    "days_since_rain": "Days since precipitation > 1mm",
+    "consecutive_dry_days": "Consecutive dry days before current day",
+    "rain_day_flag": "Binary flag: 1 if precip >= 1mm",
+    "intensity_class": "Precipitation intensity: 0=none, 1=light, 2=moderate, 3=heavy",
+    "max_precip_7d": "Maximum single-day precipitation in past 7 days",
+    "max_precip_30d": "Maximum single-day precipitation in past 30 days",
+    "wet_dry_cycles_30d": "Count of wet-to-dry transitions in past 30 days",
+    "wet_dry_cycles_90d": "Count of wet-to-dry transitions in past 90 days",
+    "vpd": "Vapor Pressure Deficit in kPa",
+    "vpd_7d_mean": "Rolling 7-day mean VPD",
+    "freeze_flag": "Binary flag: 1 if temp_min < 0C",
+    "marginal_freeze_flag": "Binary flag: 1 if temp_min < 2C",
+    "freeze_thaw_cycles_30d": "Count of freeze-thaw cycles in past 30 days",
+    "freeze_thaw_cycles_season": "Cumulative freeze-thaw cycles for water year"
+  },
+  "intensity_thresholds_mm": {
+    "none": 0,
+    "light": 1,
+    "moderate": 10,
+    "heavy": 25
+  }
+}

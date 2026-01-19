@@ -25,15 +25,15 @@ REQUIRED_MODEL_FIELDS = [
     "n_point_features",
     "n_meta_features",
     "n_wave_features",
-    "n_precip_features",
+    "n_atmos_features",
 ]
 
 REQUIRED_DATA_FIELDS = [
     "n_transect_points",
     "wave_history_days",
     "wave_timestep_hours",
-    "precip_history_days",
-    "precip_timestep_hours",
+    "atmos_history_days",
+    "atmos_timestep_hours",
 ]
 
 REQUIRED_TRAINING_FIELDS = [

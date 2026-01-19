@@ -14,7 +14,7 @@ model:
   n_point_features: 5
   n_meta_features: 7
   n_wave_features: 4
-  n_precip_features: 2
+  n_atmos_features: 24
 
   # Prediction heads - risk + retreat
   enable_risk: true
@@ -27,8 +27,8 @@ data:
   n_transect_points: 128
   wave_history_days: 90
   wave_timestep_hours: 6
-  precip_history_days: 90
-  precip_timestep_hours: 24
+  atmos_history_days: 90
+  atmos_timestep_hours: 24
   normalize_elevation: true
   normalize_to_toe: true
   train_split: 0.7

@@ -66,6 +66,7 @@ sys.path.insert(0, str(project_root))
 
 from src.data.shapefile_transect_extractor import ShapefileTransectExtractor
 from src.utils.logging import setup_logger
+from scripts.processing.qc_cube import run_qc
 
 logger = setup_logger(__name__, level="INFO")
 
@@ -659,6 +660,12 @@ def main():
         help="Limit to first N LAS files (useful for testing before full run)",
     )
 
+    parser.add_argument(
+        "--skip-qc",
+        action="store_true",
+        help="Skip automatic QC checks after extraction",
+    )
+
     args = parser.parse_args()
 
     # Apply beach preset if specified
@@ -820,6 +827,59 @@ def main():
 
     # Save cube
     save_cube(cube, args.output)
+
+    # Run QC checks
+    if not args.skip_qc:
+        print("\n")
+        print("=" * 70)
+        print("RUNNING QUALITY CONTROL CHECKS")
+        print("=" * 70)
+
+        try:
+            qc_report = run_qc(args.output, verbose=False)
+
+            # Display summary
+            status_symbol = "✓" if qc_report.passed else "✗"
+            status_text = "PASSED" if qc_report.passed else "FAILED"
+            if qc_report.passed and qc_report.warnings:
+                status_symbol = "⚠"
+                status_text = "PASSED WITH WARNINGS"
+
+            print(f"\nQC Status: {status_symbol} {status_text}")
+            print(f"   Errors: {len(qc_report.errors)}")
+            print(f"   Warnings: {len(qc_report.warnings)}")
+
+            # Show key stats
+            print("\nKey Statistics:")
+            for key in ['n_transects', 'n_epochs', 'coverage_pct', 'date_range', 'file_size']:
+                if key in qc_report.stats:
+                    print(f"   {key}: {qc_report.stats[key]}")
+
+            # Show errors
+            if qc_report.errors:
+                print("\n" + "-" * 50)
+                print("ERRORS (must fix):")
+                for err in qc_report.errors:
+                    print(f"   {err}")
+
+            # Show warnings
+            if qc_report.warnings:
+                print("\n" + "-" * 50)
+                print("WARNINGS (review recommended):")
+                for warn in qc_report.warnings[:10]:  # Limit to first 10
+                    print(f"   {warn}")
+                if len(qc_report.warnings) > 10:
+                    print(f"   ... and {len(qc_report.warnings) - 10} more warnings")
+
+            print("\n" + "=" * 70)
+
+            if not qc_report.passed:
+                logger.error("QC checks failed! Review errors above.")
+
+        except Exception as e:
+            logger.warning(f"QC checks failed to run: {e}")
+            import traceback
+            traceback.print_exc()
 
     # Visualize if requested
     if args.visualize:

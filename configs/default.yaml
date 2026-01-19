@@ -14,7 +14,7 @@ model:
   n_point_features: 5    # elevation, slope, curvature, roughness, aspect
   n_meta_features: 7     # cliff_height, mean_slope, max_slope, toe_elevation, orientation, lat, lon
   n_wave_features: 4     # hs, tp, dp, power
-  n_precip_features: 2   # daily_precip, cumulative
+  n_atmos_features: 24   # See data.atmos_feature_names for full list
 
   # Prediction heads (toggle for phased training)
   enable_risk: true
@@ -29,10 +29,48 @@ model:
 # Data
 data:
   n_transect_points: 128
+
+  # Wave data
   wave_history_days: 90
   wave_timestep_hours: 6
-  precip_history_days: 90
-  precip_timestep_hours: 24
+
+  # Atmospheric data (precipitation + temperature)
+  atmos_history_days: 90
+  atmos_timestep_hours: 24
+  n_atmos_features: 24
+  atmos_feature_names:
+    # Raw measurements (5)
+    - precip_mm
+    - temp_mean_c
+    - temp_min_c
+    - temp_max_c
+    - dewpoint_c
+    # Cumulative precipitation (4)
+    - precip_7d
+    - precip_30d
+    - precip_60d
+    - precip_90d
+    # Antecedent conditions (3)
+    - api
+    - days_since_rain
+    - consecutive_dry_days
+    # Intensity (4)
+    - rain_day_flag
+    - intensity_class
+    - max_precip_7d
+    - max_precip_30d
+    # Wetting/drying cycles (2)
+    - wet_dry_cycles_30d
+    - wet_dry_cycles_90d
+    # Evaporative demand (2)
+    - vpd
+    - vpd_7d_mean
+    # Freeze-thaw (4)
+    - freeze_flag
+    - marginal_freeze_flag
+    - freeze_thaw_cycles_30d
+    - freeze_thaw_cycles_season
+  atmos_data_dir: data/processed/atmospheric
 
   # Normalization
   normalize_elevation: true

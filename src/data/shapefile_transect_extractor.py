@@ -16,11 +16,18 @@ Example:
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Callable
 
 import numpy as np
 from scipy.interpolate import interp1d
 from scipy.spatial import cKDTree
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+    tqdm = None
 
 try:
     import geopandas as gpd
@@ -37,6 +44,32 @@ except ImportError:
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _extract_single_las_worker(
+    las_path: Path,
+    transect_gdf: "gpd.GeoDataFrame",
+    n_points: int,
+    buffer_m: float,
+    min_points: int,
+    transect_id_col: str,
+) -> Dict:
+    """Worker function for parallel LAS processing.
+
+    This is a module-level function so it can be pickled for multiprocessing.
+    """
+    # Create extractor instance in worker process
+    extractor = ShapefileTransectExtractor(
+        n_points=n_points,
+        buffer_m=buffer_m,
+        min_points=min_points,
+    )
+    return extractor.extract_single_las(
+        las_path,
+        transect_gdf,
+        transect_id_col,
+        show_progress=False,
+    )
 
 
 class ShapefileTransectExtractor:
@@ -466,11 +499,115 @@ class ShapefileTransectExtractor:
             'metadata': metadata,
         }
 
+    def extract_single_las(
+        self,
+        las_path: Path,
+        transect_gdf: "gpd.GeoDataFrame",
+        transect_id_col: str = 'tr_id',
+        show_progress: bool = False,
+    ) -> Dict[str, any]:
+        """Extract transects from a single LAS file.
+
+        Args:
+            las_path: Path to LAS/LAZ file
+            transect_gdf: GeoDataFrame with transect LineString geometries
+            transect_id_col: Column name for transect IDs
+            show_progress: Whether to show progress bar for transects
+
+        Returns:
+            Dictionary with extracted data and stats
+        """
+        las_path = Path(las_path)
+
+        # Load LAS data
+        las_data = self.load_las_file(las_path)
+
+        # Build KDTree on XY coordinates
+        tree = cKDTree(las_data['xyz'][:, :2])
+
+        # Get LAS bounds
+        las_minx, las_maxx = las_data['x'].min(), las_data['x'].max()
+        las_miny, las_maxy = las_data['y'].min(), las_data['y'].max()
+
+        # Filter transects that potentially intersect LAS bounds
+        buffer = 50  # meters
+        transect_bounds = transect_gdf.bounds
+        potential_mask = (
+            (transect_bounds['minx'] <= las_maxx + buffer) &
+            (transect_bounds['maxx'] >= las_minx - buffer) &
+            (transect_bounds['miny'] <= las_maxy + buffer) &
+            (transect_bounds['maxy'] >= las_miny - buffer)
+        )
+
+        candidate_transects = transect_gdf[potential_mask]
+
+        features = []
+        distances = []
+        metadata = []
+        transect_ids = []
+
+        extracted_count = 0
+        skipped_count = 0
+
+        # Optionally wrap with progress bar
+        iterator = candidate_transects.iterrows()
+        if show_progress and HAS_TQDM:
+            iterator = tqdm(
+                list(iterator),
+                desc=f"  {las_path.name[:30]}",
+                unit="transect",
+                leave=False,
+            )
+
+        for idx, row in iterator:
+            transect_id = row[transect_id_col] if transect_id_col in row.index else idx
+            line = row.geometry
+
+            # Extract raw points
+            raw_data = self.extract_transect_points(line, las_data, tree)
+
+            if raw_data is None:
+                skipped_count += 1
+                continue
+
+            # Resample to fixed points
+            resampled = self.resample_transect(raw_data)
+
+            if resampled is None:
+                skipped_count += 1
+                continue
+
+            # Set transect ID in metadata
+            try:
+                resampled['metadata'][9] = float(transect_id)
+            except (ValueError, TypeError):
+                resampled['metadata'][9] = float(idx)
+
+            features.append(resampled['features'])
+            distances.append(resampled['distances'])
+            metadata.append(resampled['metadata'])
+            transect_ids.append(transect_id)
+
+            extracted_count += 1
+
+        return {
+            'features': features,
+            'distances': distances,
+            'metadata': metadata,
+            'transect_ids': transect_ids,
+            'las_source': las_path.name,
+            'extracted': extracted_count,
+            'skipped': skipped_count,
+            'candidates': len(candidate_transects),
+        }
+
     def extract_from_shapefile_and_las(
         self,
         transect_gdf: "gpd.GeoDataFrame",
         las_files: List[Path],
         transect_id_col: str = 'tr_id',
+        show_progress: bool = True,
+        n_workers: int = 1,
     ) -> Dict[str, np.ndarray]:
         """Extract transects from multiple LAS files using shapefile transect lines.
 
@@ -478,6 +615,8 @@ class ShapefileTransectExtractor:
             transect_gdf: GeoDataFrame with transect LineString geometries
             las_files: List of paths to LAS/LAZ files
             transect_id_col: Column name for transect IDs
+            show_progress: Whether to show progress bars
+            n_workers: Number of parallel workers (1 = sequential)
 
         Returns:
             Dictionary containing:
@@ -493,71 +632,88 @@ class ShapefileTransectExtractor:
         all_transect_ids = []
         all_las_sources = []
 
-        for las_path in las_files:
-            las_path = Path(las_path)
-            logger.info(f"\nProcessing {las_path.name}...")
+        total_extracted = 0
+        total_skipped = 0
 
-            # Load LAS data
-            las_data = self.load_las_file(las_path)
+        if n_workers > 1:
+            # Parallel processing
+            from concurrent.futures import ProcessPoolExecutor, as_completed
+            import multiprocessing as mp
 
-            # Build KDTree on XY coordinates
-            tree = cKDTree(las_data['xyz'][:, :2])
+            # Use spawn method for compatibility
+            ctx = mp.get_context('spawn')
 
-            # Get LAS bounds
-            las_minx, las_maxx = las_data['x'].min(), las_data['x'].max()
-            las_miny, las_maxy = las_data['y'].min(), las_data['y'].max()
+            logger.info(f"Processing {len(las_files)} LAS files with {n_workers} workers...")
 
-            # Filter transects that potentially intersect LAS bounds
-            # (with some buffer for transects that start outside but cross into the data)
-            buffer = 50  # meters
-            transect_bounds = transect_gdf.bounds
-            potential_mask = (
-                (transect_bounds['minx'] <= las_maxx + buffer) &
-                (transect_bounds['maxx'] >= las_minx - buffer) &
-                (transect_bounds['miny'] <= las_maxy + buffer) &
-                (transect_bounds['maxy'] >= las_miny - buffer)
-            )
+            with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as executor:
+                # Submit all jobs
+                future_to_path = {
+                    executor.submit(
+                        _extract_single_las_worker,
+                        las_path,
+                        transect_gdf,
+                        self.n_points,
+                        self.buffer_m,
+                        self.min_points,
+                        transect_id_col,
+                    ): las_path
+                    for las_path in las_files
+                }
 
-            candidate_transects = transect_gdf[potential_mask]
-            logger.info(f"  {len(candidate_transects)} transects potentially overlap LAS bounds")
+                # Process results with progress bar
+                if show_progress and HAS_TQDM:
+                    futures_iter = tqdm(
+                        as_completed(future_to_path),
+                        total=len(las_files),
+                        desc="Processing LAS files",
+                        unit="file",
+                    )
+                else:
+                    futures_iter = as_completed(future_to_path)
 
-            extracted_count = 0
-            skipped_count = 0
+                for future in futures_iter:
+                    las_path = future_to_path[future]
+                    try:
+                        result = future.result()
+                        all_features.extend(result['features'])
+                        all_distances.extend(result['distances'])
+                        all_metadata.extend(result['metadata'])
+                        all_transect_ids.extend(result['transect_ids'])
+                        all_las_sources.extend([result['las_source']] * len(result['features']))
+                        total_extracted += result['extracted']
+                        total_skipped += result['skipped']
+                    except Exception as e:
+                        logger.error(f"Error processing {las_path}: {e}")
+        else:
+            # Sequential processing with progress
+            if show_progress and HAS_TQDM:
+                las_iter = tqdm(las_files, desc="Processing LAS files", unit="file")
+            else:
+                las_iter = las_files
 
-            for idx, row in candidate_transects.iterrows():
-                transect_id = row[transect_id_col] if transect_id_col in row.index else idx
-                line = row.geometry
+            for las_path in las_iter:
+                result = self.extract_single_las(
+                    las_path,
+                    transect_gdf,
+                    transect_id_col,
+                    show_progress=False,  # Don't show nested progress
+                )
 
-                # Extract raw points
-                raw_data = self.extract_transect_points(line, las_data, tree)
+                all_features.extend(result['features'])
+                all_distances.extend(result['distances'])
+                all_metadata.extend(result['metadata'])
+                all_transect_ids.extend(result['transect_ids'])
+                all_las_sources.extend([result['las_source']] * len(result['features']))
+                total_extracted += result['extracted']
+                total_skipped += result['skipped']
 
-                if raw_data is None:
-                    skipped_count += 1
-                    continue
+                if not show_progress or not HAS_TQDM:
+                    logger.info(
+                        f"  {result['las_source']}: {result['extracted']} extracted, "
+                        f"{result['skipped']} skipped (of {result['candidates']} candidates)"
+                    )
 
-                # Resample to fixed points
-                resampled = self.resample_transect(raw_data)
-
-                if resampled is None:
-                    skipped_count += 1
-                    continue
-
-                # Set transect ID in metadata (use index if ID is not numeric)
-                try:
-                    resampled['metadata'][9] = float(transect_id)
-                except (ValueError, TypeError):
-                    # String IDs stored separately in transect_ids array
-                    resampled['metadata'][9] = float(idx)
-
-                all_features.append(resampled['features'])
-                all_distances.append(resampled['distances'])
-                all_metadata.append(resampled['metadata'])
-                all_transect_ids.append(transect_id)
-                all_las_sources.append(las_path.name)
-
-                extracted_count += 1
-
-            logger.info(f"  Extracted: {extracted_count}, Skipped: {skipped_count}")
+        logger.info(f"Total: {total_extracted} transect-epochs extracted, {total_skipped} skipped")
 
         if len(all_features) == 0:
             logger.warning("No transects extracted!")

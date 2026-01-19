@@ -645,6 +645,13 @@ def main():
         help="Override OS detection for path conversion (default: auto-detect)",
     )
 
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers for LAS processing (default: 1 = sequential)",
+    )
+
     args = parser.parse_args()
 
     # Apply beach preset if specified
@@ -741,6 +748,7 @@ def main():
             transect_gdf,
             las_files,
             transect_id_col=args.transect_id_col,
+            n_workers=args.workers,
         )
     except Exception as e:
         logger.error(f"Extraction failed: {e}")

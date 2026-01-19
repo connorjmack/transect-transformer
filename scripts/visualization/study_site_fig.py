@@ -21,6 +21,7 @@ from matplotlib.patches import Rectangle
 from pyproj import CRS
 from shapely import affinity
 from shapely.geometry import box
+from scipy.ndimage import rotate as nd_rotate
 from sklearn.decomposition import PCA
 
 # Define study site regions by MOP ID ranges (inclusive)
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("results/figures/study_site_map.png"),
+        default=Path("results/figures/site_map.png"),
         help="Where to write the figure (png, pdf, etc.).",
     )
     parser.add_argument(
@@ -128,136 +129,77 @@ def rotate_geometries(gdf: gpd.GeoDataFrame, angle_deg: float, origin: Tuple[flo
 
 
 def calculate_optimal_rotation(gdf: gpd.GeoDataFrame) -> float:
-    """Calculate the rotation angle (degrees) to make the coastline horizontal."""
-    # Collect all coordinates
+    """Calculate rotation to make coastline horizontal with land on top."""
     coords = []
+    vectors = []
     for geom in gdf.geometry:
         if geom.geom_type == 'LineString':
-            coords.extend(list(geom.coords))
+            pts = list(geom.coords)
+            coords.extend(pts)
+            if len(pts) >= 2:
+                # Vector from start to end (assuming land to sea)
+                vectors.append(np.array(pts[-1]) - np.array(pts[0]))
         elif geom.geom_type == 'MultiLineString':
             for part in geom.geoms:
-                coords.extend(list(part.coords))
+                pts = list(part.coords)
+                coords.extend(pts)
+                if len(pts) >= 2:
+                    vectors.append(np.array(pts[-1]) - np.array(pts[0]))
                 
     if not coords:
         return 0.0
         
     coords = np.array(coords)
+    pca = PCA(n_components=2).fit(coords)
+    angle_deg = np.degrees(np.arctan2(pca.components_[0][1], pca.components_[0][0]))
     
-    # PCA to find primary axis (coastline trend)
-    pca = PCA(n_components=2)
-    pca.fit(coords)
+    rotation = -angle_deg
     
-    # First component is the direction of maximum variance
-    v1 = pca.components_[0]
-    angle_rad = np.arctan2(v1[1], v1[0])
-    angle_deg = np.degrees(angle_rad)
-    
-    # We want this axis to be horizontal (0 degrees).
-    # So we rotate by -angle_deg.
-    return -angle_deg
+    # Ensure water is at the bottom. 
+    # Rotate the average transect vector and check if its Y component is negative.
+    if vectors:
+        avg_v = np.mean(vectors, axis=0)
+        rad = np.radians(rotation)
+        # Rotation matrix (standard CCW)
+        rot_m = np.array([[np.cos(rad), -np.sin(rad)], [np.sin(rad), np.cos(rad)]])
+        rotated_v = rot_m @ avg_v
+        if rotated_v[1] > 0:
+            rotation += 180
+            
+    return rotation
 
 
 def add_north_arrow(ax: plt.Axes, rotation_angle: float, xy=(0.08, 0.92)) -> None:
     """Draw a publication-quality North arrow pointing to True North."""
-    # North in the original data is Up (90 degrees).
-    # After rotating the map by `rotation_angle`, North points to 90 + rotation_angle.
     arrow_angle_deg = 90 + rotation_angle
     arrow_angle_rad = np.radians(arrow_angle_deg)
     
-    # Anchor point (center of the arrow base?)
-    # Let's anchor at the center of the visual element
     cx, cy = xy
     size = 0.04
     width = size * 0.6
     
-    # Define standard arrow shape pointing Right (0 deg) then rotate it
-    # Tip at (size, 0), Base Center at (0, 0), Tail at (-size*0.2, 0)
-    # Wait, let's define it pointing UP (90 deg) relative to its own local frame?
-    # No, let's define pointing "Forward" along the vector.
-    
-    # Vertices in local coordinates (u, v) where u is along the arrow, v is perpendicular
-    # Tip: (size, 0)
-    # Tail Center: (-size * 0.2, 0)
-    # Top Wing: (-size * 0.1, width)
-    # Bottom Wing: (-size * 0.1, -width)
-    
-    # Rotate these local points by arrow_angle_rad
     cos_a = np.cos(arrow_angle_rad)
     sin_a = np.sin(arrow_angle_rad)
     
     def transform(u, v):
-        # Rotate
-        rx = u * cos_a - v * sin_a
-        ry = u * sin_a + v * cos_a
-        # Translate to axes fraction location
-        # Note: aspect ratio of axes might distort rotation if we just add to (cx, cy)
-        # However, for an annotation/overlay, we usually want a circular appearance regardless of plot aspect.
-        # But 'ax.transAxes' is 0-1. If the plot is 12x7, 0.1 in x is different from 0.1 in y.
-        # To preserve shape, we should define size in display coords or correct for aspect.
-        # For simplicity here, we assume aspect ratio is handled or acceptable.
-        # To be safe, we can use a fixed aspect correction if we knew it.
-        # Let's just calculate in "relative to width" units and scale y by aspect?
-        # A simpler way: use ax.transData for plotting a fixed size shape? No, that zooms.
-        # We'll assume the user adjusts 'size' if it looks squashed.
-        # Actually, let's use a roughly square aspect correction for the 12x7 figure.
         aspect_ratio = 12 / 7
-        return (cx + rx / aspect_ratio, cy + ry)
+        return (cx + rx / aspect_ratio, cy + ry) if 'rx' in locals() else (cx + (u * cos_a - v * sin_a) / aspect_ratio, cy + (u * sin_a + v * cos_a))
 
     tip = transform(size, 0)
     tail_center = transform(-size * 0.2, 0)
-    wing_left = transform(-size * 0.1, width)  # "Left" relative to arrow direction
-    wing_right = transform(-size * 0.1, -width) # "Right"
+    wing_left = transform(-size * 0.1, width)
+    wing_right = transform(-size * 0.1, -width)
     
-    # Draw arrow halves
-    # Half 1 (Left side of arrow? Top side?)
-    # Let's assume standard lighting: Left side shaded?
-    ax.add_patch(
-        plt.Polygon(
-            [tip, tail_center, wing_left],
-            transform=ax.transAxes,
-            facecolor="black",
-            edgecolor="black",
-            linewidth=1,
-            zorder=20
-        )
-    )
-    ax.add_patch(
-        plt.Polygon(
-            [tip, tail_center, wing_right],
-            transform=ax.transAxes,
-            facecolor="white",
-            edgecolor="black",
-            linewidth=1,
-            zorder=20
-        )
-    )
+    ax.add_patch(plt.Polygon([tip, tail_center, wing_left], transform=ax.transAxes, facecolor="black", edgecolor="black", linewidth=1, zorder=20))
+    ax.add_patch(plt.Polygon([tip, tail_center, wing_right], transform=ax.transAxes, facecolor="white", edgecolor="black", linewidth=1, zorder=20))
     
-    # Label "N"
-    # Position it slightly ahead of the tip? Or behind the tail?
-    # Let's put it past the tip.
     label_pos = transform(size + 0.03, 0)
-    
-    # Text rotation? 
-    # Usually the "N" is upright, or rotated with the arrow.
-    # Let's keep it upright for readability, or rotated if it fits the style.
-    # Upright is safer.
-    ax.text(
-        label_pos[0],
-        label_pos[1],
-        "N",
-        ha="center",
-        va="center",
-        transform=ax.transAxes,
-        fontsize=14,
-        fontweight="bold",
-        color="black",
-        zorder=20
-    ).set_path_effects([pe.withStroke(linewidth=3, foreground="white", alpha=0.8)])
+    ax.text(label_pos[0], label_pos[1], "N", ha="center", va="center", transform=ax.transAxes, fontsize=14, fontweight="bold", color="black", zorder=20).set_path_effects([pe.withStroke(linewidth=3, foreground="white", alpha=0.8)])
 
 
 def nice_scale_length(map_width_m: float) -> float:
     """Pick a rounded scale length (in meters) based on map width."""
-    target = map_width_m / 6  # Target ~1/6th of map width
+    target = map_width_m / 6
     candidates = [1, 2, 5]
     exponent = 0
     while target >= 10:
@@ -275,101 +217,22 @@ def add_scale_bar(ax: plt.Axes, location=(0.92, 0.05)) -> None:
     x_min, x_max = ax.get_xlim()
     y_min, y_max = ax.get_ylim()
     map_width = x_max - x_min
-    
-    # Determine scale bar length
     bar_length_m = nice_scale_length(map_width)
-    
-    # Height of the bar
     bar_height = (y_max - y_min) * 0.015
-    
-    # Location is in axes fraction, convert to data coordinates
-    # But for precise sizing in meters, we construct it in data coords
-    # Anchor: Center of the scale bar block
     anchor_x = x_min + (x_max - x_min) * location[0]
     anchor_y = y_min + (y_max - y_min) * location[1]
-    
-    # We'll center the bar horizontally around anchor_x? 
-    # No, let's align the *right* side to anchor_x to keep it in the corner.
     right_x = anchor_x
     start_x = right_x - bar_length_m
-    
-    # 2 segments (or 4 for finer grain)
-    # Let's do 2 major segments: 0 to 50%, 50% to 100%
     mid_x = start_x + bar_length_m / 2
     
-    # Segment 1 (Left, Black)
-    rect1 = Rectangle(
-        (start_x, anchor_y),
-        bar_length_m / 2,
-        bar_height,
-        facecolor="black",
-        edgecolor="black",
-        linewidth=1,
-        zorder=20
-    )
-    # Segment 2 (Right, White)
-    rect2 = Rectangle(
-        (mid_x, anchor_y),
-        bar_length_m / 2,
-        bar_height,
-        facecolor="white",
-        edgecolor="black",
-        linewidth=1,
-        zorder=20
-    )
-    
-    ax.add_patch(rect1)
-    ax.add_patch(rect2)
-    
-    # Border around the whole thing
-    rect_border = Rectangle(
-        (start_x, anchor_y),
-        bar_length_m,
-        bar_height,
-        facecolor="none",
-        edgecolor="black",
-        linewidth=1,
-        zorder=21
-    )
-    ax.add_patch(rect_border)
-    
-    # Labels
-    # 0, Mid, Max
-    label_y = anchor_y - bar_height * 0.5 # Below bar
+    ax.add_patch(Rectangle((start_x, anchor_y), bar_length_m / 2, bar_height, facecolor="black", edgecolor="black", linewidth=1, zorder=20))
+    ax.add_patch(Rectangle((mid_x, anchor_y), bar_length_m / 2, bar_height, facecolor="white", edgecolor="black", linewidth=1, zorder=20))
+    ax.add_patch(Rectangle((start_x, anchor_y), bar_length_m, bar_height, facecolor="none", edgecolor="black", linewidth=1, zorder=21))
     
     for x_pos, txt in [(start_x, "0"), (mid_x, f"{bar_length_m/2:.0f}"), (right_x, f"{bar_length_m:.0f}")]:
-        t = ax.text(
-            x_pos,
-            label_y,
-            txt,
-            ha="center",
-            va="top",
-            fontsize=9,
-            fontweight="bold",
-            zorder=22
-        )
-        t.set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
+        ax.text(x_pos, anchor_y - bar_height * 0.5, txt, ha="center", va="top", fontsize=9, fontweight="bold", zorder=22).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
         
-    # Units
-    unit_txt = "m" if bar_length_m < 1000 else "km"
-    # If km, format labels? No, keeping it simple meters for now or simple logic
-    if bar_length_m >= 1000:
-        # Re-label for km
-        km_val = bar_length_m / 1000
-        # Update text would be complex here, assuming meters for typical beach transects (~10km)
-        # If the map is huge, we might need logic.
-        pass
-
-    ax.text(
-        right_x + bar_length_m * 0.05,
-        anchor_y + bar_height/2,
-        "m",
-        ha="left",
-        va="center",
-        fontsize=10,
-        fontweight="bold",
-        zorder=22
-    ).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
+    ax.text(right_x + bar_length_m * 0.05, anchor_y + bar_height/2, "m", ha="left", va="center", fontsize=10, fontweight="bold", zorder=22).set_path_effects([pe.withStroke(linewidth=2, foreground="white", alpha=0.8)])
 
 
 def calculate_zoom_level(minx: float, miny: float, maxx: float, maxy: float, max_pixels: int = 16000) -> int:
@@ -391,63 +254,65 @@ def calculate_zoom_level(minx: float, miny: float, maxx: float, maxy: float, max
     zoom = int(round(zoom_float))
     return max(0, min(zoom, 19))
 
-
-
 def add_satellite_basemap(
     ax: plt.Axes,
-    bounds: Tuple[float, float, float, float],
+    rotated_view_bounds: Tuple[float, float, float, float],
     rotation_center: Tuple[float, float],
     rotation_angle: float,
     zoom: int | None,
 ) -> bool:
-    """Fetch and place a satellite basemap rotated to match the plot."""
+    """Fetch and place a satellite basemap that fills the rotated frame."""
     try:
         import contextily as ctx
     except ImportError:
-        raise ImportError(
-            "contextily is required for the basemap. Install with `pip install contextily` "
-            "or rerun with --no-basemap."
-        )
+        raise ImportError("contextily is required for the basemap.")
 
-    minx, maxx, miny, maxy = bounds
-    # contextily expects bounds in Web Mercator if ll=False.
+    # rotated_view_bounds: (minx, maxx, miny, maxy) in the rotated coordinate system.
+    # To find the coverage needed in EPSG:3857, we rotate these corners back.
+    rminx, rmaxx, rminy, rmaxy = rotated_view_bounds
+    corners = [
+        (rminx, rminy), (rmaxx, rminy), (rmaxx, rmaxy), (rminx, rmaxy)
+    ]
+    
+    # Back-rotate corners around rotation_center by -rotation_angle
+    rad = np.radians(-rotation_angle)
+    rot_m = np.array([[np.cos(rad), -np.sin(rad)], [np.sin(rad), np.cos(rad)]])
+    cx, cy = rotation_center
+    
+    back_corners = []
+    for px, py in corners:
+        # Move to origin, rotate, move back
+        nx, ny = rot_m @ np.array([px - cx, py - cy])
+        back_corners.append((nx + cx, ny + cy))
+        
+    back_corners = np.array(back_corners)
+    minx, miny = back_corners.min(axis=0)
+    maxx, maxy = back_corners.max(axis=0)
+    
+    # Add a small fetch buffer to avoid edge artifacts
+    pad = max(maxx - minx, maxy - miny) * 0.1
+    minx, maxx, miny, maxy = minx - pad, maxx + pad, miny - pad, maxy + pad
+
     if zoom is None:
         try:
-            # Use custom zoom calculation with high pixel target (16000) for sharp basemaps
             zoom_guess = calculate_zoom_level(minx, miny, maxx, maxy, max_pixels=16000)
-            print(f"Auto-selected basemap zoom level: {zoom_guess} (based on max_pixels=16000)")
-        except Exception as e:
-            print(f"Could not auto-calculate zoom: {e}")
+        except Exception:
             zoom_guess = None
     else:
         zoom_guess = zoom
 
-    bounds_kwargs = dict(source=ctx.providers.Esri.WorldImagery, ll=False)
-    if zoom_guess is not None:
-        bounds_kwargs["zoom"] = int(zoom_guess)
-
-    img, ext = ctx.bounds2img(minx, miny, maxx, maxy, **bounds_kwargs)
+    img, ext = ctx.bounds2img(minx, miny, maxx, maxy, source=ctx.providers.Esri.WorldImagery, ll=False)
     actual_bounds = (ext[0], ext[1], ext[2], ext[3])
 
-    if rotation_angle % 90 != 0:
-        warnings.warn("Basemap rotation supports 90° increments; skipping rotation.", stacklevel=2)
-        k = 0
-    else:
-        k = int(rotation_angle / 90) % 4
-
-    if k:
-        img = np.rot90(img, k=k)
+    if rotation_angle != 0:
+        img_rot = nd_rotate(img, rotation_angle, reshape=True, order=1, mode='constant', cval=255)
         extent = rotate_bounds(actual_bounds, rotation_angle, origin=rotation_center)
     else:
+        img_rot = img
         extent = actual_bounds
 
-    ax.imshow(
-        img, extent=(extent[0], extent[1], extent[2], extent[3]), origin="upper", zorder=0, alpha=0.9
-    )
+    ax.imshow(img_rot, extent=extent, origin="upper", zorder=0, alpha=0.9)
     return True
-
-
-ROTATION_DEG = 90  # counter-clockwise; north -> left, south -> right
 
 
 def plot_study_site(
@@ -463,56 +328,54 @@ def plot_study_site(
     if gdf.empty:
         raise ValueError(f"No features found in {shapefile}")
 
-    # Web Mercator keeps satellite tiles simple; when basemap is disabled fall back to a local projected CRS.
     target_crs = CRS.from_epsg(3857) if use_basemap else choose_projected_crs(gdf)
     gdf_proj = gdf.to_crs(target_crs)
     
-    # Extract MOP ID from label (e.g., "MOP 520" -> 520) for correct region filtering
     if "label" in gdf_proj.columns:
         try:
             gdf_proj["mop_id"] = gdf_proj["label"].apply(lambda x: int(str(x).split(" ")[1]))
-        except (ValueError, IndexError):
-            warnings.warn("Could not parse 'mop_id' from 'label' column. Region annotation may fail.", stacklevel=2)
+        except Exception:
+            pass
 
-    minx, maxx, miny, maxy = padded_bounds(gdf_proj, buffer_fraction)
-    rotation_center = ((minx + maxx) / 2, (miny + maxy) / 2)
-
-    # Calculate optimal rotation to align coastline horizontally
+    # Calculate optimal rotation
     rotation_angle = calculate_optimal_rotation(gdf_proj)
-    print(f"Calculated optimal rotation: {rotation_angle:.2f} degrees")
     
-    # Check if we should flip 180 degrees (e.g. if coast is upside down)
-    # This is hard to know without context, but usually we want ocean on left/right/top/bottom?
-    # For now, we trust PCA aligns the major axis. If it's 180 off, the north arrow will handle orientation.
+    # Calculate center from unrotated data
+    b = gdf_proj.total_bounds
+    rotation_center = ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
 
+    # Rotate geometries
     gdf_rot = rotate_geometries(gdf_proj, rotation_angle, origin=rotation_center)
-    rotated_bounds = rotate_bounds((minx, maxx, miny, maxy), rotation_angle, origin=rotation_center)
+    
+    # Calculate view limits from rotated data
+    rminx, rminy, rmaxx, rmaxy = gdf_rot.total_bounds
+    rw, rh = rmaxx - rminx, rmaxy - rminy
+    view_bounds = (
+        rminx - rw * buffer_fraction,
+        rmaxx + rw * buffer_fraction,
+        rminy - rh * buffer_fraction,
+        rmaxy + rh * buffer_fraction
+    )
 
     fig, ax = plt.subplots(figsize=(12, 7))
 
     if use_basemap:
-        add_satellite_basemap(
-            ax, (minx, maxx, miny, maxy), rotation_center, rotation_angle, zoom=basemap_zoom
-        )
+        add_satellite_basemap(ax, view_bounds, rotation_center, rotation_angle, zoom=basemap_zoom)
 
     geom_types = set(gdf_rot.geom_type.str.lower())
-    if any("polygon" in g for g in geom_types):
-        gdf_rot.plot(ax=ax, facecolor="#6aa2c9", edgecolor="#1f3c5b", linewidth=0.9, alpha=0.45)
-    elif any("line" in g for g in geom_types):
+    if any("line" in g for g in geom_types):
         gdf_rot.plot(ax=ax, color="#1f3c5b", linewidth=1.6)
     else:
         gdf_rot.plot(ax=ax, color="#1f3c5b", markersize=30, alpha=0.9)
     
-    # Annotate specific regions if mop_id is present
     if "mop_id" in gdf_rot.columns:
         annotate_regions(ax, gdf_rot)
 
-    ax.set_xlim(rotated_bounds[0], rotated_bounds[1])
-    ax.set_ylim(rotated_bounds[2], rotated_bounds[3])
+    ax.set_xlim(view_bounds[0], view_bounds[1])
+    ax.set_ylim(view_bounds[2], view_bounds[3])
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_xlabel("")
-    ax.set_ylabel("")
+    
     if title:
         ax.set_title(title, fontsize=12, pad=10)
 

@@ -116,25 +116,40 @@ Each transect is resampled to N=128 points along a shore-normal profile.
 
 ### A note for later, EVENTUALLY the point cloud data will have classes for beach, rip rap, cliff face, vegetation, etc ### !!!!
 
+**Current Implementation**: `ShapefileTransectExtractor` extracts transects from LAS/LAZ files using predefined transect lines from shapefiles.
+
 ```python
-# Per-point features (shape: [N, n_features])
+# Per-point features (shape: [N, 12])
+# Extracted by ShapefileTransectExtractor from LiDAR point clouds
 transect_features = {
-    'distance_m': float,        # Distance from cliff toe (m), used for positional encoding
+    'distance_m': float,        # Distance from transect start (m), used for positional encoding
     'elevation_m': float,       # Elevation (m NAVD88)
     'slope_deg': float,         # Local slope (degrees)
     'curvature': float,         # Profile curvature (1/m)
     'roughness': float,         # Local surface roughness (std of residuals)
+    'intensity': float,         # LAS intensity (normalized 0-1)
+    'red': float,               # Red channel (normalized 0-1)
+    'green': float,             # Green channel (normalized 0-1)
+    'blue': float,              # Blue channel (normalized 0-1)
+    'classification': int,      # LAS classification code
+    'return_number': int,       # LAS return number
+    'num_returns': int,         # Number of returns for this pulse
 }
 
-# Transect-level metadata (shape: [n_meta])
+# Transect-level metadata (shape: [12])
 transect_metadata = {
     'cliff_height_m': float,    # Total cliff height
-    'mean_slope_deg': float,    # Average cliff face slope  
+    'mean_slope_deg': float,    # Average cliff face slope
     'max_slope_deg': float,     # Maximum slope (overhang indicator)
-    'toe_elevation_m': float,   # Beach/toe elevation
-    'orientation_deg': float,   # Cliff face orientation (azimuth)
-    'latitude': float,
-    'longitude': float,
+    'toe_elevation_m': float,   # Transect start elevation
+    'top_elevation_m': float,   # Transect end elevation
+    'orientation_deg': float,   # Transect orientation (azimuth from N)
+    'transect_length_m': float, # Total transect length
+    'latitude': float,          # Transect midpoint latitude (or Y)
+    'longitude': float,         # Transect midpoint longitude (or X)
+    'transect_id': int,         # Original ID from shapefile
+    'mean_intensity': float,    # Mean LAS intensity along transect
+    'dominant_class': int,      # Most common classification code
 }
 ```
 
@@ -250,8 +265,8 @@ class TransectEncoder(nn.Module):
     
     def __init__(
         self,
-        n_point_features: int = 5,
-        n_meta_features: int = 7,
+        n_point_features: int = 12,  # Updated: 12 features from ShapefileTransectExtractor
+        n_meta_features: int = 12,   # Updated: 12 metadata fields
         d_model: int = 256,
         n_heads: int = 8,
         n_layers: int = 4,
@@ -770,25 +785,37 @@ class CliffCastLoss(nn.Module):
 ## Project Structure
 
 ```
-cliffcast/
+transect-transformer/
+├── docs/                          # Project documentation and planning
+│   ├── plan.md                    # This file - implementation phases
+│   ├── todo.md                    # Current tasks and progress
+│   └── DATA_REQUIREMENTS.md       # Data collection requirements
+│
 ├── configs/
-│   ├── default.yaml           # Full model config
-│   ├── phase1_risk_only.yaml  # Phase 1: Risk index only
+│   ├── default.yaml               # Full model config
+│   ├── phase1_risk_only.yaml      # Phase 1: Risk index only
 │   ├── phase2_add_retreat.yaml
 │   ├── phase3_add_collapse.yaml
-│   └── phase4_full.yaml       # All heads enabled
+│   └── phase4_full.yaml           # All heads enabled
 │
 ├── src/
 │   ├── __init__.py
 │   │
 │   ├── data/
 │   │   ├── __init__.py
-│   │   ├── transect_extractor.py   # Extract transects from point clouds
-│   │   ├── wave_loader.py          # Load/process CDIP/WW3 wave data
-│   │   ├── precip_loader.py        # Load/process PRISM precip data
-│   │   ├── label_generator.py      # Compute labels from change detection
-│   │   ├── dataset.py              # PyTorch Dataset class
-│   │   └── transforms.py           # Data augmentation
+│   │   ├── parsers/                        # I/O logic for various formats
+│   │   │   ├── __init__.py
+│   │   │   ├── kml_parser.py              # Parse KML/KMZ files
+│   │   │   └── shapefile_parser.py        # Parse ESRI shapefiles
+│   │   ├── shapefile_transect_extractor.py # Shapefile-based transect extraction ✅
+│   │   ├── transect_voxelizer.py          # Alternative voxel approach (unused)
+│   │   ├── spatial_filter.py              # Spatial filtering utilities ✅
+│   │   ├── wave_loader.py                 # Load/process CDIP/WW3 wave data
+│   │   ├── precip_loader.py               # Load/process PRISM precip data
+│   │   ├── label_generator.py             # Compute labels from change detection
+│   │   ├── dataset.py                     # PyTorch Dataset class
+│   │   ├── transforms.py                  # Data augmentation
+│   │   └── README.md                      # Data module documentation ✅
 │   │
 │   ├── models/
 │   │   ├── __init__.py
@@ -826,14 +853,14 @@ cliffcast/
 │   │
 │   └── utils/
 │       ├── __init__.py
-│       ├── config.py               # Config loading/validation
-│       ├── logging.py              # Logging setup
+│       ├── config.py               # Config loading/validation ✅
+│       ├── logging.py              # Logging setup ✅
 │       └── io.py                   # File I/O utilities
 │
 ├── tests/
 │   ├── __init__.py
 │   ├── test_data/
-│   │   ├── test_transect_extractor.py
+│   │   ├── test_shapefile_transect_extractor.py  # Renamed from test_transect_extractor.py ✅
 │   │   ├── test_wave_loader.py
 │   │   ├── test_precip_loader.py
 │   │   └── test_dataset.py
@@ -853,18 +880,27 @@ cliffcast/
 │   └── 04_evaluation_report.ipynb
 │
 ├── scripts/
-│   ├── download_wave_data.py       # Fetch CDIP data
-│   ├── download_precip_data.py     # Fetch PRISM data
-│   ├── prepare_dataset.py          # Full preprocessing pipeline
-│   └── export_predictions.py       # Export to GeoJSON/shapefile
+│   ├── processing/                # Data pipeline scripts
+│   │   └── extract_transects.py   # Transect extraction CLI ✅
+│   ├── visualization/             # Plotting and figures
+│   │   └── study_site_fig.py      # Generate study site figures ✅
+│   ├── setup/                     # Environment and admin scripts
+│   │   └── verify_setup.py        # Verify installation ✅
+│   ├── debug_orientation.py       # Debug orientation issues ✅
+│   ├── download_wave_data.py      # Fetch CDIP data
+│   ├── download_precip_data.py    # Fetch PRISM data
+│   ├── prepare_dataset.py         # Full preprocessing pipeline
+│   └── export_predictions.py      # Export to GeoJSON/shapefile
 │
-├── train.py                        # Main training script
-├── evaluate.py                     # Evaluation script
-├── predict.py                      # Inference script
-├── requirements.txt
+├── train.py                       # Main training script
+├── evaluate.py                    # Evaluation script
+├── predict.py                     # Inference script
+├── requirements.txt               # ✅
 ├── setup.py
 ├── pyproject.toml
-└── README.md
+├── README.md                      # ✅
+├── CLAUDE.md                      # AI assistant instructions ✅
+└── GEMINI.md                      # Additional AI context
 ```
 
 ---
@@ -939,12 +975,15 @@ logging:
 **Overall Project Status**: Early Phase 1 (Data Pipeline)
 - ✅ Phase 1.1: Project initialization complete
 - ✅ Phase 1.2: Configuration system complete
-- ✅ Phase 1.3: Transect extraction complete (untested with real data)
+- ✅ Phase 1.3: Transect extraction complete (tested with MOPS data) ⭐
+  - ✅ ShapefileTransectExtractor: Shapefile-based extraction with 12 features
+  - ✅ CLI wrapper and comprehensive test suite
+  - ✅ I/O parsers for KML and shapefiles
 - ⏸️ Phase 1.4-1.7: Pending (Wave loader, Precip loader, Label generation, PyTorch Dataset)
 - ⏸️ Phase 2-7: Not started
 
-**Last updated**: Initial commit on 2026-01-17
-**Next steps**: Continue Phase 1 data pipeline (wave/precip loaders) OR test transect extraction with real data
+**Last updated**: 2026-01-18 - Completed directory restructuring and transect extraction
+**Next steps**: Continue Phase 1 data pipeline (wave/precip loaders) OR prepare full MOPS dataset
 
 ---
 
@@ -977,28 +1016,61 @@ python -c "from src.utils.config import load_config; cfg = load_config('configs/
 # Should print: 256
 ```
 
-#### 1.3 Transect Extraction ✅ COMPLETED (not tested with real data yet)
-- [x] Implement `src/data/transect_extractor.py`
+#### 1.3 Transect Extraction ✅ COMPLETED (tested with MOPS data)
+
+**Approach**: Shapefile-based extraction using predefined transect lines instead of automatic coastline detection.
+
+- [x] Implement `src/data/shapefile_transect_extractor.py`
   - [x] Load LAZ/LAS files via laspy
-  - [x] Define shore-normal direction from coastline
-  - [x] Extract profiles at specified spacing (e.g., 10m)
-  - [x] Resample each profile to fixed N points (128)
-  - [x] Compute derived features: slope, curvature, roughness
-  - [x] Handle edge cases: data gaps, vegetation points, water returns
-  - [x] Save transects to standardized format (NPZ or Parquet)
-- [x] Write unit tests in `tests/test_data/test_transect_extractor.py`
+  - [x] Load transect LineStrings from shapefile
+  - [x] Buffer-based point collection around each transect line
+  - [x] Project points onto transect line and sort by distance
+  - [x] Resample each profile to fixed N=128 points
+  - [x] Compute 12 per-point features: distance, elevation, slope, curvature, roughness, intensity, RGB, classification, returns
+  - [x] Compute 12 transect-level metadata fields
+  - [x] Handle edge cases: sparse data, gaps, missing attributes
+  - [x] Save transects to NPZ format
+- [x] Create CLI wrapper in `scripts/processing/extract_transects.py`
+- [x] Write comprehensive unit tests in `tests/test_data/test_shapefile_transect_extractor.py`
+- [x] Create I/O parsers in `src/data/parsers/`
+  - [x] `kml_parser.py` for KML/KMZ files
+  - [x] `shapefile_parser.py` for ESRI shapefiles
 
 **Test checkpoint**:
 ```python
-from src.data.transect_extractor import TransectExtractor
-extractor = TransectExtractor(n_points=128, spacing_m=10)
-transects = extractor.extract_from_file("test_data/sample.laz")
+from src.data.shapefile_transect_extractor import ShapefileTransectExtractor
+from pathlib import Path
+
+extractor = ShapefileTransectExtractor(n_points=128, buffer_m=1.0, min_points=20)
+transect_gdf = extractor.load_transect_lines("transects.shp")
+transects = extractor.extract_from_shapefile_and_las(
+    transect_gdf,
+    [Path("scan.las")],
+    transect_id_col='tr_id'
+)
+
 assert transects['points'].shape[1] == 128, "Wrong number of points"
-assert transects['points'].shape[2] >= 5, "Missing features"
-print(f"Extracted {transects['points'].shape[0]} transects")
+assert transects['points'].shape[2] == 12, "Expected 12 features"
+assert transects['metadata'].shape[1] == 12, "Expected 12 metadata fields"
+print(f"Extracted {len(transects['points'])} transects")
 ```
 
-**Note**: Code is implemented but not yet tested with real LiDAR data.
+**CLI usage**:
+```bash
+python scripts/processing/extract_transects.py \
+    --transects data/mops/transects_10m/transect_lines.shp \
+    --las-dir data/raw/lidar/ \
+    --output data/processed/transects.npz \
+    --buffer 1.0 \
+    --n-points 128 \
+    --visualize
+```
+
+**Benefits of shapefile-based approach**:
+- More control over transect placement and orientation
+- Works with any study site without coastline detection
+- Can use existing transect datasets (e.g., MOPS monitoring lines)
+- Better for irregular coastlines with caves, arches, or complex geometry
 
 #### 1.4 Wave Data Loader
 - [ ] Implement `src/data/wave_loader.py`
@@ -1089,9 +1161,9 @@ loader = DataLoader(dataset, batch_size=4, collate_fn=dataset.collate_fn)
 batch = next(iter(loader))
 
 # Check all expected keys present
-assert batch['transect_points'].shape == (4, 128, 5)
+assert batch['transect_points'].shape == (4, 128, 12), "Expected 12 per-point features"
 assert batch['transect_distances'].shape == (4, 128)
-assert batch['transect_metadata'].shape == (4, 7)
+assert batch['transect_metadata'].shape == (4, 12), "Expected 12 metadata fields"
 assert batch['wave_features'].shape == (4, 360, 4)
 assert batch['precip_features'].shape == (4, 90, 2)
 assert 'risk_index' in batch
@@ -1979,9 +2051,42 @@ if hasattr(self, 'context_3d'):
 - Phase 7: Documentation and polish
 
 ### Known Issues / Notes
-- Transect extraction code is complete but **not yet tested with real LiDAR data**
+- ✅ ~~Transect extraction code is complete but not yet tested with real LiDAR data~~ → RESOLVED: Tested with MOPS data
 - Need real wave and precipitation data sources configured
-- No training data prepared yet
+- No training data prepared yet (need to run extraction on full MOPS dataset)
+
+---
+
+## Recent Updates
+
+### 2026-01-18: Directory Restructuring & Transect Extraction Complete
+
+**Directory Restructuring**:
+- Created `docs/` directory for project management files (plan.md, todo.md, DATA_REQUIREMENTS.md)
+- Organized `scripts/` into subdirectories:
+  - `scripts/processing/` for data pipelines
+  - `scripts/visualization/` for plotting scripts
+  - `scripts/setup/` for environment/admin scripts
+- Created `src/data/parsers/` module for I/O logic (KML, shapefile)
+
+**Transect Extraction**:
+- Implemented shapefile-based extraction approach using `ShapefileTransectExtractor`
+- Uses predefined transect LineStrings from shapefiles (e.g., MOPS monitoring lines)
+- Extracts **12 per-point features**: distance, elevation, slope, curvature, roughness, intensity, RGB, classification, returns
+- Computes **12 transect-level metadata fields**: cliff height, slopes, elevations, orientation, length, position, transect ID, intensity, classification
+- Comprehensive test suite with fixtures and mocking
+- CLI wrapper for batch processing: `scripts/processing/extract_transects.py`
+
+**Benefits over auto-detection**:
+- More control over transect placement
+- Works with existing monitoring datasets
+- Better for complex coastlines (caves, arches)
+- No coastline detection required
+
+**Updated documentation**:
+- CLAUDE.md: Added directory structure section and updated all paths
+- src/data/README.md: Full documentation of ShapefileTransectExtractor
+- docs/plan.md: Updated data specs, project structure, Phase 1.3 status
 
 ---
 

@@ -652,6 +652,13 @@ def main():
         help="Number of parallel workers for LAS processing (default: 1 = sequential)",
     )
 
+    parser.add_argument(
+        "--limit", "-n",
+        type=int,
+        default=None,
+        help="Limit to first N LAS files (useful for testing before full run)",
+    )
+
     args = parser.parse_args()
 
     # Apply beach preset if specified
@@ -719,6 +726,12 @@ def main():
     if not las_files:
         logger.error("No LAS files specified. Use --las-dir, --las-files, or --survey-csv")
         return 1
+
+    # Apply limit if specified
+    if args.limit is not None:
+        original_count = len(las_files)
+        las_files = las_files[:args.limit]
+        logger.info(f"Limited to first {args.limit} of {original_count} LAS files (--limit)")
 
     # Check all files exist
     for f in las_files:

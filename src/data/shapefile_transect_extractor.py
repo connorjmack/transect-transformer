@@ -479,6 +479,7 @@ class ShapefileTransectExtractor:
         """
         try:
             from laspy import CopcReader
+            from laspy.copc import Bounds
         except ImportError:
             logger.debug("CopcReader not available, falling back to chunked loading")
             return None
@@ -489,12 +490,12 @@ class ShapefileTransectExtractor:
         try:
             reader = CopcReader.open(str(las_path))
 
-            # Query points within 2D bounds (use extreme z range)
-            points = reader.query(
-                mins=np.array([x_min, y_min, -1e10]),
-                maxs=np.array([x_max, y_max, 1e10])
+            # Query points within 2D bounds (laspy handles z filtering)
+            query_bounds = Bounds(
+                mins=np.array([x_min, y_min]),
+                maxs=np.array([x_max, y_max])
             )
-            reader.close()
+            points = reader.query(bounds=query_bounds)
 
             if len(points) == 0:
                 logger.debug(f"COPC query returned no points for {las_path.name}")

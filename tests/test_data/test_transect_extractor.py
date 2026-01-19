@@ -613,7 +613,7 @@ class TestPathConversion:
         mac_path = "/Volumes/group/lidar/2018/scan.las"
         linux_path = convert_path_for_os(mac_path, target_os='linux')
 
-        assert linux_path == "/projects/group/lidar/2018/scan.las"
+        assert linux_path == "/project/group/lidar/2018/scan.las"
 
     def test_linux_to_mac_conversion(self):
         """Test converting Linux paths to Mac."""
@@ -621,7 +621,7 @@ class TestPathConversion:
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
         from scripts.processing.extract_transects import convert_path_for_os
 
-        linux_path = "/projects/group/lidar/2018/scan.las"
+        linux_path = "/project/group/lidar/2018/scan.las"
         mac_path = convert_path_for_os(linux_path, target_os='mac')
 
         assert mac_path == "/Volumes/group/lidar/2018/scan.las"
@@ -636,7 +636,7 @@ class TestPathConversion:
         result = convert_path_for_os(mac_path, target_os='mac')
         assert result == mac_path
 
-        linux_path = "/projects/group/lidar/scan.las"
+        linux_path = "/project/group/lidar/scan.las"
         result = convert_path_for_os(linux_path, target_os='linux')
         assert result == linux_path
 

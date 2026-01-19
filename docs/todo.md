@@ -31,7 +31,7 @@
 
 ### Cross-Platform Support
 - [x] Auto-detect OS (Mac vs Linux)
-- [x] Convert paths in survey CSV: `/Volumes/group/...` <-> `/projects/group/...`
+- [x] Convert paths in survey CSV: `/Volumes/group/...` <-> `/project/group/...`
 - [x] --target-os flag to override auto-detection
 
 ## In Progress

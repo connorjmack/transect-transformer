@@ -151,7 +151,7 @@ python scripts/processing/subset_transects.py \
     --input data/processed/all_transects.npz \
     --list
 
-# Cross-platform: paths auto-convert between Mac (/Volumes/group/...) and Linux (/projects/group/...)
+# Cross-platform: paths auto-convert between Mac (/Volumes/group/...) and Linux (/project/group/...)
 # Force Linux paths when running on Linux with Mac-formatted CSV:
 python scripts/processing/extract_transects.py \
     --transects data/mops/transects_10m/transect_lines.shp \

@@ -19,7 +19,7 @@ Current per-point features (12):
 
 Cross-Platform Support:
   Automatically converts paths between Mac (/Volumes/group/...) and Linux
-  (/projects/group/...) formats. The script detects the current OS and converts
+  (/project/group/...) formats. The script detects the current OS and converts
   paths from survey CSVs accordingly. Use --target-os to override auto-detection.
 
 TODO: Future enhancement - add per-point normal vectors (nx, ny, nz) computed from
@@ -84,12 +84,12 @@ BEACH_MOP_RANGES = {
 # Maps path prefixes between Mac and Linux
 PATH_MAPPINGS = {
     'mac_to_linux': {
-        '/Volumes/group': '/projects/group',
-        '/Volumes/': '/projects/',
+        '/Volumes/group': '/project/group',
+        '/Volumes/': '/project/',
     },
     'linux_to_mac': {
-        '/projects/group': '/Volumes/group',
-        '/projects/': '/Volumes/',
+        '/project/group': '/Volumes/group',
+        '/project/': '/Volumes/',
     },
 }
 
@@ -132,7 +132,7 @@ def convert_path_for_os(path: str, target_os: Optional[str] = None) -> str:
     # Determine source OS from path
     if path_str.startswith('/Volumes/'):
         source_os = 'mac'
-    elif path_str.startswith('/projects/'):
+    elif path_str.startswith('/project/'):
         source_os = 'linux'
     else:
         # Unknown format, return as-is

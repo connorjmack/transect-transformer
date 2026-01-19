@@ -573,8 +573,9 @@ class ShapefileTransectExtractor:
     ) -> Optional[Dict[str, np.ndarray]]:
         """Extract a single transect using an already-open COPC reader.
 
-        This is the most efficient approach for COPC files - reuses an open reader
-        and queries only the narrow buffer around one transect.
+        Uses segmented queries along the transect line to minimize data loading.
+        Instead of querying the full bounding box (which loads millions of points
+        for long diagonal transects), we query small segments along the line.
 
         Args:
             reader: Already-opened CopcReader instance
@@ -589,20 +590,157 @@ class ShapefileTransectExtractor:
         except ImportError:
             return None
 
-        # Get transect bounds directly from Shapely (fast - no GeoDataFrame!)
-        minx, miny, maxx, maxy = line.bounds
+        # Get transect geometry
+        coords = np.array(line.coords)
+        length = line.length
 
-        x_min = minx - self.buffer_m - 1
-        y_min = miny - self.buffer_m - 1
-        x_max = maxx + self.buffer_m + 1
-        y_max = maxy + self.buffer_m + 1
+        # For short transects, use simple bounding box query
+        # For long transects, use segmented queries along the line
+        segment_length = 20.0  # Query in 20m segments
+        buffer = self.buffer_m + 1  # Buffer around each segment
 
         try:
-            # Query narrow strip around this transect only
-            query_bounds = Bounds(
-                mins=np.array([x_min, y_min]),
-                maxs=np.array([x_max, y_max])
-            )
+            if length <= segment_length * 2:
+                # Short transect: use simple bounding box
+                minx, miny, maxx, maxy = line.bounds
+                query_bounds = Bounds(
+                    mins=np.array([minx - buffer, miny - buffer]),
+                    maxs=np.array([maxx + buffer, maxy + buffer])
+                )
+                points = reader.query(bounds=query_bounds)
+            else:
+                # Long transect: query segments along the line
+                # Sample points along the transect at segment_length intervals
+                n_segments = max(2, int(np.ceil(length / segment_length)))
+                sample_distances = np.linspace(0, length, n_segments + 1)
+
+                # Collect points from all segments
+                all_x, all_y, all_z = [], [], []
+                all_intensity, all_red, all_green, all_blue = [], [], [], []
+                all_class, all_ret, all_numret = [], [], []
+
+                for i in range(n_segments):
+                    # Get segment start and end points
+                    d_start = sample_distances[i]
+                    d_end = sample_distances[i + 1]
+                    pt_start = line.interpolate(d_start)
+                    pt_end = line.interpolate(d_end)
+
+                    # Segment bounding box (much smaller than full transect bbox)
+                    seg_minx = min(pt_start.x, pt_end.x) - buffer
+                    seg_maxx = max(pt_start.x, pt_end.x) + buffer
+                    seg_miny = min(pt_start.y, pt_end.y) - buffer
+                    seg_maxy = max(pt_start.y, pt_end.y) + buffer
+
+                    query_bounds = Bounds(
+                        mins=np.array([seg_minx, seg_miny]),
+                        maxs=np.array([seg_maxx, seg_maxy])
+                    )
+                    seg_points = reader.query(bounds=query_bounds)
+
+                    if len(seg_points) > 0:
+                        all_x.append(np.asarray(seg_points.x))
+                        all_y.append(np.asarray(seg_points.y))
+                        all_z.append(np.asarray(seg_points.z))
+
+                        if hasattr(seg_points, 'intensity'):
+                            all_intensity.append(np.asarray(seg_points.intensity, dtype=np.float32))
+                        else:
+                            all_intensity.append(np.zeros(len(seg_points), dtype=np.float32))
+
+                        if hasattr(seg_points, 'red'):
+                            all_red.append(np.asarray(seg_points.red, dtype=np.float32))
+                            all_green.append(np.asarray(seg_points.green, dtype=np.float32))
+                            all_blue.append(np.asarray(seg_points.blue, dtype=np.float32))
+                        else:
+                            all_red.append(np.zeros(len(seg_points), dtype=np.float32))
+                            all_green.append(np.zeros(len(seg_points), dtype=np.float32))
+                            all_blue.append(np.zeros(len(seg_points), dtype=np.float32))
+
+                        if hasattr(seg_points, 'classification'):
+                            all_class.append(np.asarray(seg_points.classification, dtype=np.float32))
+                        else:
+                            all_class.append(np.zeros(len(seg_points), dtype=np.float32))
+
+                        if hasattr(seg_points, 'return_number'):
+                            all_ret.append(np.asarray(seg_points.return_number, dtype=np.float32))
+                        else:
+                            all_ret.append(np.ones(len(seg_points), dtype=np.float32))
+
+                        if hasattr(seg_points, 'number_of_returns'):
+                            all_numret.append(np.asarray(seg_points.number_of_returns, dtype=np.float32))
+                        else:
+                            all_numret.append(np.ones(len(seg_points), dtype=np.float32))
+
+                if not all_x:
+                    return None
+
+                # Concatenate all segments and remove duplicates
+                x = np.concatenate(all_x)
+                y = np.concatenate(all_y)
+                z = np.concatenate(all_z)
+
+                # Remove duplicates (points may appear in overlapping segments)
+                xyz_combined = np.column_stack([x, y, z])
+                _, unique_idx = np.unique(xyz_combined.round(3), axis=0, return_index=True)
+
+                xyz = xyz_combined[unique_idx].astype(np.float64)
+                n_points = len(xyz)
+
+                # Apply unique index to all attributes
+                intensity = np.concatenate(all_intensity)[unique_idx]
+                red = np.concatenate(all_red)[unique_idx]
+                green = np.concatenate(all_green)[unique_idx]
+                blue = np.concatenate(all_blue)[unique_idx]
+                classification = np.concatenate(all_class)[unique_idx]
+                return_number = np.concatenate(all_ret)[unique_idx]
+                num_returns = np.concatenate(all_numret)[unique_idx]
+
+                # Normalize intensity
+                max_int = intensity.max() if intensity.max() > 0 else 1
+                intensity = intensity / max_int
+
+                # Normalize RGB from 16-bit
+                red = red / 65535.0
+                green = green / 65535.0
+                blue = blue / 65535.0
+
+                las_data = {
+                    'xyz': xyz,
+                    'x': xyz[:, 0],
+                    'y': xyz[:, 1],
+                    'z': xyz[:, 2],
+                    'intensity': intensity,
+                    'red': red,
+                    'green': green,
+                    'blue': blue,
+                    'classification': classification,
+                    'return_number': return_number,
+                    'num_returns': num_returns,
+                }
+
+                # Build KDTree and extract transect points
+                tree = cKDTree(las_data['xyz'][:, :2])
+                raw_data = self.extract_transect_points(line, las_data, tree)
+
+                if raw_data is None:
+                    return None
+
+                # Resample to fixed points
+                resampled = self.resample_transect(raw_data)
+
+                if resampled is None:
+                    return None
+
+                # Set transect ID in metadata
+                try:
+                    resampled['metadata'][9] = float(transect_id)
+                except (ValueError, TypeError):
+                    pass
+
+                return resampled
+
+            # Simple bounding box path (for short transects)
             points = reader.query(bounds=query_bounds)
 
             if len(points) == 0:
@@ -1055,6 +1193,12 @@ class ShapefileTransectExtractor:
         # Check if file is COPC (proper detection including VLR check)
         is_copc = self._is_copc_file(las_path) if use_spatial_filter else False
 
+        # Decide whether to use COPC per-transect queries or chunked loading
+        # COPC per-transect is faster for few isolated transects
+        # Chunked loading is faster for many nearby transects (avoids re-loading overlapping data)
+        n_transects = len(candidate_transects)
+        use_copc_per_transect = is_copc and use_spatial_filter and n_transects <= 5
+
         features = []
         distances = []
         metadata = []
@@ -1063,15 +1207,15 @@ class ShapefileTransectExtractor:
         extracted_count = 0
         skipped_count = 0
 
-        if is_copc and use_spatial_filter:
+        if use_copc_per_transect:
             # COPC fast path: Open reader once, query all transects
             try:
                 from laspy import CopcReader
             except ImportError:
-                is_copc = False  # Fall through to non-COPC path
+                use_copc_per_transect = False  # Fall through to chunked path
 
-        if is_copc and use_spatial_filter:
-            logger.debug(f"Using COPC fast path for {las_path.name} ({len(candidate_transects)} transects)")
+        if use_copc_per_transect:
+            logger.debug(f"Using COPC per-transect queries for {las_path.name} ({n_transects} transects)")
 
             try:
                 # Open COPC reader ONCE for all transects (major speedup!)
@@ -1105,21 +1249,22 @@ class ShapefileTransectExtractor:
 
                     extracted_count += 1
 
-                # Properly close the reader
-                reader.close()
+                # Close the file handle (CopcReader.source is the BufferedReader)
+                if hasattr(reader, 'source') and hasattr(reader.source, 'close'):
+                    reader.source.close()
 
             except Exception as e:
-                logger.warning(f"COPC fast path failed for {las_path.name}: {e}, falling back to chunked loading")
-                # Reset and fall through to non-COPC path
+                logger.warning(f"COPC per-transect failed for {las_path.name}: {e}, falling back to chunked loading")
+                # Reset and fall through to chunked path
                 features = []
                 distances = []
                 metadata = []
                 transect_ids = []
                 extracted_count = 0
                 skipped_count = 0
-                is_copc = False
+                use_copc_per_transect = False
 
-        if not is_copc or not use_spatial_filter:
+        if not use_copc_per_transect:
             # Non-COPC path: Load all transects' points at once
             # Calculate bounds of candidate transects (with buffer for spatial loading)
             transect_total_bounds = candidate_transects.total_bounds  # (minx, miny, maxx, maxy)

@@ -26,7 +26,7 @@ def compute_file_hash(file_path: str) -> str:
 
 def create_empty_labels(
     data: dict[str, Any],
-    data_path: str,
+    data_path: Optional[str] = None,
     labeler_name: str = "",
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
@@ -34,7 +34,7 @@ def create_empty_labels(
 
     Args:
         data: Loaded transect data dict
-        data_path: Path to source data file
+        data_path: Optional path to source data file (for hash computation)
         labeler_name: Name of labeler creating the file
 
     Returns:
@@ -47,12 +47,16 @@ def create_empty_labels(
     # Initialize all as unlabeled (-1)
     labels = np.full((n_transects, n_pairs), -1, dtype=np.int8)
 
+    # Compute source info (hash is optional if no file path)
+    source_file = Path(data_path).name if data_path else "uploaded"
+    source_hash = compute_file_hash(data_path) if data_path else ""
+
     # Build metadata
     metadata = {
         'transect_ids': np.array(data['transect_ids']),
         'epoch_dates': np.array(data.get('epoch_dates', [])),
-        'source_file': Path(data_path).name,
-        'source_hash': compute_file_hash(data_path),
+        'source_file': source_file,
+        'source_hash': source_hash,
         'class_names': np.array([
             'Stable', 'Beach erosion', 'Toe erosion',
             'Small rockfall', 'Large failure'

@@ -546,13 +546,9 @@ def _create_new_labels(labels_path: str) -> None:
             st.sidebar.error("Load data first")
             return
 
-        if st.session_state.data_path is None:
-            st.sidebar.error("Cannot create labels for uploaded files (need file path for hash)")
-            return
-
         labels, metadata = create_empty_labels(
             st.session_state.data,
-            st.session_state.data_path,
+            st.session_state.data_path,  # Can be None for uploaded files
             st.session_state.labeler_name,
         )
 

@@ -76,3 +76,7 @@ BEACH_MOP_RANGES = {
 # Event display colors
 EVENT_MARKER_COLOR = '#9b59b6'  # Purple
 EVENT_HIGHLIGHT_COLOR = 'rgba(155, 89, 182, 0.2)'
+
+# Cliff marker colors
+CLIFF_TOE_COLOR = '#e74c3c'  # Red
+CLIFF_TOP_COLOR = '#9b59b6'  # Purple

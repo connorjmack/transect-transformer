@@ -212,3 +212,79 @@ def compute_pair_change(
         'max_loss': float(np.min(valid_diff)),
         'std_change': float(np.std(valid_diff)),
     }
+
+
+def has_cliff_data(data: dict[str, Any]) -> bool:
+    """Check if cliff detection data is available in the dataset."""
+    return 'toe_distances' in data and 'top_distances' in data
+
+
+def get_cliff_positions(
+    data: dict[str, Any],
+    transect_idx: int,
+    epoch_idx: int
+) -> Optional[dict[str, Any]]:
+    """
+    Get cliff toe and top positions for a specific transect-epoch.
+
+    Args:
+        data: Full dataset (must contain cliff detection arrays)
+        transect_idx: Index of transect in the data arrays
+        epoch_idx: Epoch index
+
+    Returns:
+        Dictionary with toe/top info, or None if no cliff detected
+    """
+    if not has_cliff_data(data):
+        return None
+
+    has_cliff = data.get('has_cliff')
+    toe_distances = data['toe_distances']
+    top_distances = data['top_distances']
+    toe_indices = data.get('toe_indices')
+    top_indices = data.get('top_indices')
+    toe_confidences = data.get('toe_confidences')
+    top_confidences = data.get('top_confidences')
+
+    # Handle both cube (n_transects, n_epochs) and flat (n_transects,) formats
+    if toe_distances.ndim == 2:
+        # Check if cliff exists (if has_cliff array is present)
+        if has_cliff is not None and not has_cliff[transect_idx, epoch_idx]:
+            return None
+
+        toe_dist = float(toe_distances[transect_idx, epoch_idx])
+        top_dist = float(top_distances[transect_idx, epoch_idx])
+
+        # Check for invalid values (-1 means no cliff detected)
+        if toe_dist < 0 or top_dist < 0:
+            return None
+
+        return {
+            'has_cliff': True,
+            'toe_distance': toe_dist,
+            'top_distance': top_dist,
+            'toe_idx': int(toe_indices[transect_idx, epoch_idx]) if toe_indices is not None else None,
+            'top_idx': int(top_indices[transect_idx, epoch_idx]) if top_indices is not None else None,
+            'toe_confidence': float(toe_confidences[transect_idx, epoch_idx]) if toe_confidences is not None else None,
+            'top_confidence': float(top_confidences[transect_idx, epoch_idx]) if top_confidences is not None else None,
+        }
+    else:
+        # Flat format (single epoch) - shouldn't happen for cube format but handle it
+        if has_cliff is not None and not has_cliff[transect_idx]:
+            return None
+
+        toe_dist = float(toe_distances[transect_idx])
+        top_dist = float(top_distances[transect_idx])
+
+        if toe_dist < 0 or top_dist < 0:
+            return None
+
+        return {
+            'has_cliff': True,
+            'toe_distance': toe_dist,
+            'top_distance': top_dist,
+            'toe_idx': int(toe_indices[transect_idx]) if toe_indices is not None else None,
+            'top_idx': int(top_indices[transect_idx]) if top_indices is not None else None,
+            'toe_confidence': float(toe_confidences[transect_idx]) if toe_confidences is not None else None,
+            'top_confidence': float(top_confidences[transect_idx]) if top_confidences is not None else None,
+        }

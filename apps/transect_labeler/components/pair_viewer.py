@@ -10,6 +10,8 @@ from apps.transect_labeler.utils.data_loader import (
     compute_pair_change,
     get_transect_ids,
     get_feature_names,
+    has_cliff_data,
+    get_cliff_positions,
 )
 
 
@@ -32,23 +34,30 @@ def render_pair_viewer():
         st.error(f"Error loading transect pair: {e}")
         return
 
+    # Get cliff positions if available
+    cliff_pos_epoch1 = None
+    cliff_pos_epoch2 = None
+    if has_cliff_data(data):
+        cliff_pos_epoch1 = get_cliff_positions(data, transect_idx, pair_idx)
+        cliff_pos_epoch2 = get_cliff_positions(data, transect_idx, pair_idx + 1)
+
     # Header with current position info
     st.subheader(f"Transect {transect_id}: {pair_data['epoch1_date']} -> {pair_data['epoch2_date']}")
 
-    # Create comparison plot
-    fig = _create_comparison_plot(pair_data)
+    # Create comparison plot with cliff markers
+    fig = _create_comparison_plot(pair_data, cliff_pos_epoch1, cliff_pos_epoch2)
     st.plotly_chart(fig, use_container_width=True)
 
     # Difference plot below
-    fig_diff = _create_difference_plot(pair_data)
+    fig_diff = _create_difference_plot(pair_data, cliff_pos_epoch1, cliff_pos_epoch2)
     st.plotly_chart(fig_diff, use_container_width=True)
 
     # Summary statistics
     _render_change_summary(pair_data)
 
 
-def _create_comparison_plot(pair_data: dict) -> go.Figure:
-    """Create overlaid profile plot comparing two epochs."""
+def _create_comparison_plot(pair_data: dict, cliff_pos_epoch1: dict | None, cliff_pos_epoch2: dict | None) -> go.Figure:
+    """Create overlaid profile plot comparing two epochs with cliff markers."""
     feature_name = st.session_state.selected_feature
     feature_names = pair_data.get('feature_names', [])
 
@@ -78,6 +87,56 @@ def _create_comparison_plot(pair_data: dict) -> go.Figure:
         line=dict(color=config.EPOCH_2_COLOR, width=config.PROFILE_LINE_WIDTH),
     ))
 
+    # Add cliff markers for epoch 1
+    if cliff_pos_epoch1 is not None:
+        toe_idx = cliff_pos_epoch1.get('toe_idx')
+        top_idx = cliff_pos_epoch1.get('top_idx')
+        if toe_idx is not None and top_idx is not None:
+            points1 = pair_data['epoch1']['points']
+            # Toe marker (epoch 1)
+            fig.add_trace(go.Scatter(
+                x=[cliff_pos_epoch1['toe_distance']],
+                y=[points1[toe_idx, feature_idx]],
+                mode='markers',
+                name=f'Toe ({pair_data["epoch1_date"]})',
+                marker=dict(symbol='triangle-up', size=12, color=config.EPOCH_1_COLOR, line=dict(width=2, color='white')),
+                showlegend=True,
+            ))
+            # Top marker (epoch 1)
+            fig.add_trace(go.Scatter(
+                x=[cliff_pos_epoch1['top_distance']],
+                y=[points1[top_idx, feature_idx]],
+                mode='markers',
+                name=f'Top ({pair_data["epoch1_date"]})',
+                marker=dict(symbol='triangle-down', size=12, color=config.EPOCH_1_COLOR, line=dict(width=2, color='white')),
+                showlegend=True,
+            ))
+
+    # Add cliff markers for epoch 2
+    if cliff_pos_epoch2 is not None:
+        toe_idx = cliff_pos_epoch2.get('toe_idx')
+        top_idx = cliff_pos_epoch2.get('top_idx')
+        if toe_idx is not None and top_idx is not None:
+            points2 = pair_data['epoch2']['points']
+            # Toe marker (epoch 2)
+            fig.add_trace(go.Scatter(
+                x=[cliff_pos_epoch2['toe_distance']],
+                y=[points2[toe_idx, feature_idx]],
+                mode='markers',
+                name=f'Toe ({pair_data["epoch2_date"]})',
+                marker=dict(symbol='triangle-up', size=12, color=config.EPOCH_2_COLOR, line=dict(width=2, color='white')),
+                showlegend=True,
+            ))
+            # Top marker (epoch 2)
+            fig.add_trace(go.Scatter(
+                x=[cliff_pos_epoch2['top_distance']],
+                y=[points2[top_idx, feature_idx]],
+                mode='markers',
+                name=f'Top ({pair_data["epoch2_date"]})',
+                marker=dict(symbol='triangle-down', size=12, color=config.EPOCH_2_COLOR, line=dict(width=2, color='white')),
+                showlegend=True,
+            ))
+
     unit = config.FEATURE_UNITS.get(feature_name, '')
     y_label = f"{feature_name} ({unit})" if unit else feature_name
 
@@ -93,8 +152,8 @@ def _create_comparison_plot(pair_data: dict) -> go.Figure:
     return fig
 
 
-def _create_difference_plot(pair_data: dict) -> go.Figure:
-    """Create difference plot (epoch2 - epoch1)."""
+def _create_difference_plot(pair_data: dict, cliff_pos_epoch1: dict | None, cliff_pos_epoch2: dict | None) -> go.Figure:
+    """Create difference plot (epoch2 - epoch1) with cliff position indicators."""
     feature_name = st.session_state.selected_feature
     feature_names = pair_data.get('feature_names', [])
 
@@ -136,6 +195,47 @@ def _create_difference_plot(pair_data: dict) -> go.Figure:
     ))
 
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
+
+    # Add vertical lines for cliff positions
+    if cliff_pos_epoch1 is not None:
+        # Toe position (epoch 1) - dashed blue
+        fig.add_vline(
+            x=cliff_pos_epoch1['toe_distance'],
+            line_dash="dash",
+            line_color=config.EPOCH_1_COLOR,
+            annotation_text="Toe (E1)",
+            annotation_position="top left",
+            opacity=0.7,
+        )
+        # Top position (epoch 1) - dashed blue
+        fig.add_vline(
+            x=cliff_pos_epoch1['top_distance'],
+            line_dash="dash",
+            line_color=config.EPOCH_1_COLOR,
+            annotation_text="Top (E1)",
+            annotation_position="top right",
+            opacity=0.7,
+        )
+
+    if cliff_pos_epoch2 is not None:
+        # Toe position (epoch 2) - solid orange
+        fig.add_vline(
+            x=cliff_pos_epoch2['toe_distance'],
+            line_dash="solid",
+            line_color=config.EPOCH_2_COLOR,
+            annotation_text="Toe (E2)",
+            annotation_position="bottom left",
+            opacity=0.7,
+        )
+        # Top position (epoch 2) - solid orange
+        fig.add_vline(
+            x=cliff_pos_epoch2['top_distance'],
+            line_dash="solid",
+            line_color=config.EPOCH_2_COLOR,
+            annotation_text="Top (E2)",
+            annotation_position="bottom right",
+            opacity=0.7,
+        )
 
     unit = config.FEATURE_UNITS.get(feature_name, '')
     y_label = f"Delta {feature_name} ({unit})" if unit else f"Delta {feature_name}"

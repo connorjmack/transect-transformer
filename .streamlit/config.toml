@@ -1,0 +1,4 @@
+[server]
+# Increase max message size for large transect data cubes
+# Default is 200 MB; set to 400 MB to handle unified cubes
+maxMessageSize = 400

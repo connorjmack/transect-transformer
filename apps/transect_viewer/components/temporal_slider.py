@@ -15,6 +15,32 @@ from apps.transect_viewer.utils.data_loader import (
 )
 
 
+def _get_valid_epochs_for_transect(data: dict, transect_id: int) -> list:
+    """
+    Get list of epoch indices that have valid data for a given transect.
+
+    Returns:
+        List of epoch indices where data is present (not NaN)
+    """
+    transect_ids = data['transect_ids']
+    if isinstance(transect_ids, list):
+        transect_ids = np.array(transect_ids)
+
+    idx = np.where(transect_ids == transect_id)[0]
+    if len(idx) == 0:
+        return []
+    idx = idx[0]
+
+    points = data['points']
+    # Check for NaN at first point of each epoch for this transect
+    valid_epochs = []
+    for epoch_idx in range(points.shape[1]):
+        if not np.isnan(points[idx, epoch_idx, 0, 0]):
+            valid_epochs.append(epoch_idx)
+
+    return valid_epochs
+
+
 def render_temporal_slider():
     """Render the temporal slider view for single transect analysis."""
     if st.session_state.data is None:
@@ -66,57 +92,81 @@ def render_temporal_slider():
 
     st.markdown("---")
 
-    # Epoch slider
+    # Get valid epochs for this transect (epochs with data)
+    valid_epochs = _get_valid_epochs_for_transect(data, transect_id)
+
+    if len(valid_epochs) == 0:
+        st.warning(f"No data available for transect {transect_id}")
+        return
+
+    if len(valid_epochs) == 1:
+        st.info(f"Only one epoch with data for transect {transect_id}")
+        slider_position = 0
+        actual_epoch_idx = valid_epochs[0]
+    else:
+        # Create labels only for valid epochs
+        valid_epoch_labels = [
+            f"{epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
+            for i in valid_epochs
+        ]
+
+        # Get previous slider position, clamped to valid range
+        prev_position = st.session_state.get('slider_epoch_idx', 0)
+        initial_position = min(prev_position, len(valid_epochs) - 1)
+
+        slider_position = st.slider(
+            "Scrub through time",
+            min_value=0,
+            max_value=len(valid_epochs) - 1,
+            value=initial_position,
+            format=f"Epoch %d",
+            key="epoch_slider",
+        )
+        st.session_state.slider_epoch_idx = slider_position
+        actual_epoch_idx = valid_epochs[slider_position]
+
+    # Epoch labels for display
     epoch_labels = [
         f"{epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
         for i in range(dims['n_epochs'])
     ]
 
-    slider_epoch = st.slider(
-        "Scrub through time",
-        min_value=0,
-        max_value=dims['n_epochs'] - 1,
-        value=st.session_state.get('slider_epoch_idx', 0),
-        format=f"Epoch %d",
-        key="epoch_slider",
-    )
-    st.session_state.slider_epoch_idx = slider_epoch
-
     # Show current epoch info
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Current Epoch", epoch_labels[slider_epoch])
+        st.metric("Current Epoch", epoch_labels[actual_epoch_idx])
     with col2:
-        st.metric("Epoch Index", f"{slider_epoch + 1} of {dims['n_epochs']}")
+        st.metric("Epoch Index", f"{slider_position + 1} of {len(valid_epochs)} available")
     with col3:
-        if slider_epoch > 0:
-            days_diff = _compute_days_between(epoch_dates, 0, slider_epoch)
+        if slider_position > 0:
+            first_valid_epoch = valid_epochs[0]
+            days_diff = _compute_days_between(epoch_dates, first_valid_epoch, actual_epoch_idx)
             if days_diff:
-                st.metric("Days from Start", days_diff)
+                st.metric("Days from First", days_diff)
 
     st.markdown("---")
 
     # Get transect data for current epoch
     try:
-        transect = get_transect_by_id(data, transect_id, epoch_idx=slider_epoch)
+        transect = get_transect_by_id(data, transect_id, epoch_idx=actual_epoch_idx)
     except ValueError as e:
         st.error(str(e))
         return
 
-    # Compute fixed y-axis range from first epoch for consistent comparison
-    y_range = _get_fixed_y_range(data, transect_id, selected_feature, feature_names)
+    # Compute fixed y-axis range from first valid epoch for consistent comparison
+    y_range = _get_fixed_y_range_valid(data, transect_id, selected_feature, feature_names, valid_epochs)
 
     # Main profile plot
-    _render_profile_plot(transect, selected_feature, feature_names, epoch_labels[slider_epoch], y_range)
+    _render_profile_plot(transect, selected_feature, feature_names, epoch_labels[actual_epoch_idx], y_range)
 
-    # Show context: small multiples of all epochs
-    with st.expander("Show All Epochs Overview", expanded=False):
-        _render_epoch_thumbnails(data, transect_id, selected_feature, feature_names, slider_epoch, epoch_labels)
+    # Show context: small multiples of valid epochs only
+    with st.expander("Show All Available Epochs Overview", expanded=False):
+        _render_epoch_thumbnails_valid(data, transect_id, selected_feature, feature_names, actual_epoch_idx, epoch_labels, valid_epochs)
 
     st.markdown("---")
 
     # Metadata at current epoch
-    _render_epoch_metadata(transect, epoch_labels[slider_epoch])
+    _render_epoch_metadata(transect, epoch_labels[actual_epoch_idx])
 
 
 def _get_fixed_y_range(data: dict, transect_id: int, feature_name: str, feature_names: list) -> tuple:
@@ -137,6 +187,35 @@ def _get_fixed_y_range(data: dict, transect_id: int, feature_name: str, feature_
             return None
 
         y_min, y_max = float(valid.min()), float(valid.max())
+        padding = (y_max - y_min) * 0.1
+
+        return (y_min - padding, y_max + padding)
+    except Exception:
+        return None
+
+
+def _get_fixed_y_range_valid(data: dict, transect_id: int, feature_name: str, feature_names: list, valid_epochs: list) -> tuple:
+    """
+    Compute y-axis range from all valid epochs for consistent comparison.
+
+    Returns:
+        Tuple of (y_min, y_max) with padding
+    """
+    try:
+        feature_idx = feature_names.index(feature_name)
+        all_values = []
+
+        for epoch_idx in valid_epochs:
+            transect = get_transect_by_id(data, transect_id, epoch_idx=epoch_idx)
+            values = transect['points'][:, feature_idx]
+            valid = values[~np.isnan(values)]
+            if len(valid) > 0:
+                all_values.extend(valid.tolist())
+
+        if len(all_values) == 0:
+            return None
+
+        y_min, y_max = min(all_values), max(all_values)
         padding = (y_max - y_min) * 0.1
 
         return (y_min - padding, y_max + padding)
@@ -218,12 +297,25 @@ def _render_epoch_thumbnails(
     n_cols = min(4, n_epochs)
     n_rows = (n_epochs + n_cols - 1) // n_cols
 
+    # Calculate safe spacing (must be less than 1/(rows-1) for rows > 1)
+    if n_rows > 1:
+        max_v_spacing = 1.0 / (n_rows - 1) - 0.001  # Small buffer for float precision
+        vertical_spacing = min(0.12, max_v_spacing)
+    else:
+        vertical_spacing = 0.12
+
+    if n_cols > 1:
+        max_h_spacing = 1.0 / (n_cols - 1) - 0.001
+        horizontal_spacing = min(0.05, max_h_spacing)
+    else:
+        horizontal_spacing = 0.05
+
     fig = make_subplots(
         rows=n_rows,
         cols=n_cols,
         subplot_titles=epoch_labels,
-        vertical_spacing=0.12,
-        horizontal_spacing=0.05,
+        vertical_spacing=vertical_spacing,
+        horizontal_spacing=horizontal_spacing,
     )
 
     # Get global y range for consistency
@@ -278,6 +370,108 @@ def _render_epoch_thumbnails(
     fig.update_layout(
         height=200 * n_rows,
         title_text=f"All Epochs - {feature_name} (current epoch highlighted in red)",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_epoch_thumbnails_valid(
+    data: dict,
+    transect_id: int,
+    feature_name: str,
+    feature_names: list,
+    current_epoch: int,
+    epoch_labels: list,
+    valid_epochs: list
+):
+    """Render small multiples showing only valid epochs for this transect."""
+    feature_idx = feature_names.index(feature_name)
+    n_valid = len(valid_epochs)
+
+    if n_valid == 0:
+        st.info("No valid epochs to display")
+        return
+
+    # Determine grid layout
+    n_cols = min(4, n_valid)
+    n_rows = (n_valid + n_cols - 1) // n_cols
+
+    # Calculate safe spacing (must be less than 1/(rows-1) for rows > 1)
+    if n_rows > 1:
+        max_v_spacing = 1.0 / (n_rows - 1) - 0.001
+        vertical_spacing = min(0.12, max_v_spacing)
+    else:
+        vertical_spacing = 0.12
+
+    if n_cols > 1:
+        max_h_spacing = 1.0 / (n_cols - 1) - 0.001
+        horizontal_spacing = min(0.05, max_h_spacing)
+    else:
+        horizontal_spacing = 0.05
+
+    # Create labels for valid epochs only
+    valid_labels = [epoch_labels[e] for e in valid_epochs]
+
+    fig = make_subplots(
+        rows=n_rows,
+        cols=n_cols,
+        subplot_titles=valid_labels,
+        vertical_spacing=vertical_spacing,
+        horizontal_spacing=horizontal_spacing,
+    )
+
+    # Get global y range from valid epochs for consistency
+    all_values = []
+    for epoch_idx in valid_epochs:
+        try:
+            transect = get_transect_by_id(data, transect_id, epoch_idx=epoch_idx)
+            values = transect['points'][:, feature_idx]
+            valid = values[~np.isnan(values)]
+            if len(valid) > 0:
+                all_values.extend(valid.tolist())
+        except Exception:
+            pass
+
+    if all_values:
+        y_min, y_max = min(all_values), max(all_values)
+        y_padding = (y_max - y_min) * 0.1
+        y_range = [y_min - y_padding, y_max + y_padding]
+    else:
+        y_range = None
+
+    for i, epoch_idx in enumerate(valid_epochs):
+        row = i // n_cols + 1
+        col = i % n_cols + 1
+
+        try:
+            transect = get_transect_by_id(data, transect_id, epoch_idx=epoch_idx)
+            distances = transect['distances']
+            values = transect['points'][:, feature_idx]
+
+            # Highlight current epoch
+            line_color = '#e74c3c' if epoch_idx == current_epoch else '#1f77b4'
+            line_width = 2 if epoch_idx == current_epoch else 1
+
+            fig.add_trace(
+                go.Scatter(
+                    x=distances,
+                    y=values,
+                    mode='lines',
+                    line=dict(color=line_color, width=line_width),
+                    showlegend=False,
+                ),
+                row=row, col=col
+            )
+
+            if y_range:
+                fig.update_yaxes(range=y_range, row=row, col=col)
+
+        except Exception:
+            pass
+
+    fig.update_layout(
+        height=200 * n_rows,
+        title_text=f"Available Epochs - {feature_name} (current epoch highlighted in red)",
     )
 
     st.plotly_chart(fig, use_container_width=True)

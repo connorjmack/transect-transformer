@@ -1,5 +1,12 @@
 # CliffCast Todo List
 
+# Decisions to make
+- should we limit the transect to be only between the cliff toe and cliff top? Can use cliffdelinea2.0 for this. 
+- include beach or no? (beach erosion could be one of the failure classes)
+- failure classes (large upper cliff failure, cliff toe erosion, minor rockfall, beach erosion, construction should be one also)
+- need transect inputs to be refined (m3c2 distance, horizontal/inland change from previous survey? what else?)
+- 
+
 ## Recently Completed
 
 ### Phase 1: Data Pipeline (COMPLETE)

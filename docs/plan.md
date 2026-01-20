@@ -2205,6 +2205,171 @@ if hasattr(self, 'context_3d'):
 
 ---
 
+## Future: Transect Viewer Lazy Loading for Large Datasets
+
+The current transect viewer (`apps/transect_viewer/`) loads the entire NPZ file into memory, which fails for datasets >200 MB (Streamlit's default `server.maxMessageSize`). For full study area visualization (multi-GB datasets), implement lazy loading.
+
+### Recommended Approach: Zarr + On-Demand Loading
+
+1. **Convert NPZ to Zarr format** (chunked, lazy-loading arrays):
+   ```python
+   import zarr
+   import numpy as np
+
+   data = np.load('unified_cube.npz')
+   root = zarr.open('unified_cube.zarr', mode='w')
+   root.create_dataset('points', data=data['points'], chunks=(100, 1, 128, 12))
+   root.create_dataset('metadata', data=data['metadata'], chunks=(100, 1, 12))
+   root.create_dataset('distances', data=data['distances'], chunks=(100, 1, 128))
+   ```
+
+2. **Modify data_loader.py** to support on-demand loading:
+   - Load only metadata/summary on startup (transect IDs, epoch dates, dimensions)
+   - Load individual transects only when selected in the viewer
+   - Use `@st.cache_data` per-transect instead of caching entire dataset
+
+3. **Pre-compute dashboard summaries** (~1 MB file):
+   - Coverage matrix, elevation stats, quality metrics
+   - Store separately from full data cube
+
+### Alternative: Memory-Mapped NPY Files
+
+Split NPZ into separate .npy files and use `np.load(..., mmap_mode='r')` for lazy access.
+
+### Data Strategy by View
+
+| View | Strategy |
+|------|----------|
+| Dashboard | Pre-computed summary file |
+| Single Transect Inspector | Load single transect on-demand |
+| Temporal Slider | Load single transect, all epochs |
+| Cross-Transect View | Load N transects, single epoch |
+
+### Temporary Workaround
+
+Until lazy loading is implemented, increase Streamlit's message size limit in `.streamlit/config.toml`:
+```toml
+[server]
+maxMessageSize = 400  # MB
+```
+
+---
+
+## Future: Transect Extraction Improvements
+
+The current `ShapefileTransectExtractor` provides a working baseline but has several areas for improvement to increase data quality and prediction accuracy.
+
+### 1. Cliff Top Noise Removal (PTV3)
+
+**Problem**: Raw LiDAR point clouds contain vegetation, structures, and other noise on the cliff top that affects geometry calculations.
+
+**Solution**: Use Point Transformer V3 (PTV3) for semantic segmentation to:
+- Classify points as cliff face, vegetation, structure, beach, etc.
+- Filter out non-cliff points before transect extraction
+- Improve signal-to-noise ratio for cliff geometry features
+
+**Implementation**:
+```python
+# Conceptual workflow
+from ptv3 import PointTransformerV3
+
+# 1. Load pre-trained or fine-tuned PTV3 model
+model = PointTransformerV3.load('cliff_segmentation_weights.pt')
+
+# 2. Predict point classes
+point_classes = model.predict(point_cloud)  # cliff_face, vegetation, structure, beach, etc.
+
+# 3. Filter to cliff points only
+cliff_mask = point_classes == 'cliff_face'
+filtered_points = point_cloud[cliff_mask]
+
+# 4. Extract transect from filtered points
+extractor.extract(filtered_points, transect_line)
+```
+
+### 2. Improved Feature Calculations
+
+**Current Issues**:
+- Slope calculated from simple finite differences - noisy at fine scales
+- Curvature sensitive to point spacing irregularities
+- Roughness metric may not capture geologically meaningful texture
+
+**Planned Improvements**:
+- **Multi-scale slope**: Compute slope at multiple window sizes (1m, 5m, 10m) and use scale-appropriate values
+- **Robust curvature**: Use polynomial fitting over local neighborhoods instead of finite differences
+- **Geomorphic roughness**: Implement terrain ruggedness index (TRI) or vector ruggedness measure (VRM)
+- **Overhang detection**: Improve detection of undercuts using local surface normal analysis
+- **Fracture density proxy**: Estimate from local point cloud roughness/irregularity
+
+**Example - Multi-scale slope**:
+```python
+def compute_multiscale_slope(distances, elevations, scales=[1.0, 5.0, 10.0]):
+    """Compute slope at multiple spatial scales."""
+    slopes = {}
+    for scale in scales:
+        # Use Gaussian-weighted gradient at each scale
+        sigma = scale / 2.0
+        smoothed = gaussian_filter1d(elevations, sigma=sigma / np.mean(np.diff(distances)))
+        gradient = np.gradient(smoothed, distances)
+        slopes[f'slope_{scale}m'] = np.degrees(np.arctan(gradient))
+    return slopes
+```
+
+### 3. Refined Cliff Toe and Top Extraction (Deep Learning)
+
+**Problem**: Current toe/top detection uses simple heuristics (elevation thresholds, slope changes) that fail on:
+- Complex cliff morphologies (multiple benches, notches)
+- Gradual transitions (talus slopes)
+- Partially obscured boundaries (vegetation, debris)
+
+**Solution**: Use existing deep learning cliff delineation model for robust boundary detection.
+
+**Integration with CliffCast**:
+```python
+# Conceptual workflow
+from cliff_delineation import CliffDelineator
+
+# 1. Load pre-trained delineation model
+delineator = CliffDelineator.load('cliff_delineation_weights.pt')
+
+# 2. Predict toe and top positions for each transect
+toe_position, top_position = delineator.predict(transect_points)
+
+# 3. Use refined boundaries for:
+#    - Accurate cliff height calculation
+#    - Proper distance normalization (0 = toe, 1 = top)
+#    - Consistent metadata across epochs
+#    - Change detection alignment
+
+# 4. Store in metadata
+metadata['toe_elevation_m'] = transect_points[toe_position, 1]  # elevation at toe
+metadata['top_elevation_m'] = transect_points[top_position, 1]  # elevation at top
+metadata['cliff_height_m'] = metadata['top_elevation_m'] - metadata['toe_elevation_m']
+```
+
+**Benefits**:
+- Consistent toe/top identification across temporal epochs (critical for change detection)
+- More accurate cliff height and slope calculations
+- Better alignment for temporal differencing
+- Handles complex morphologies that confuse rule-based approaches
+
+### Implementation Priority
+
+| Improvement | Impact | Effort | Priority |
+|-------------|--------|--------|----------|
+| Cliff toe/top (DL delineation) | High | Medium | 1 - Critical for temporal alignment |
+| Cliff top noise removal (PTV3) | High | Medium | 2 - Improves all downstream features |
+| Multi-scale slope | Medium | Low | 3 - Quick win for feature quality |
+| Robust curvature/roughness | Medium | Medium | 4 - After validating baseline model |
+
+### Dependencies
+
+- **PTV3**: Requires pre-trained weights or training data for cliff segmentation
+- **Cliff Delineation Model**: Already built - needs integration into extraction pipeline
+- **Feature improvements**: Can be done incrementally without model retraining
+
+---
+
 ## Success Criteria
 
 ### Minimum Viable Product (MVP)

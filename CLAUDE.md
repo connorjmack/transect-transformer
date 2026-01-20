@@ -148,11 +148,20 @@ python predict.py --input data/new_site/ --checkpoint checkpoints/best.pt --outp
 
 ### Data Preprocessing
 ```bash
-# Extract transects from survey CSV (recommended workflow)
+# Extract transects for a single beach (per-beach workflow)
 python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --beach delmar --output data/processed/delmar.npz
 # Beaches: blacks, torrey, delmar, solana, sanelijo, encinitas (or use --mop-min/--mop-max for custom ranges)
 # Add --prefer-laz for faster COPC.LAZ loading (10-100x speedup if available)
 # Add --target-os linux for cross-platform path conversion
+
+# UNIFIED CUBE MODE (recommended): Extract all beaches into one cube with consistent indexing
+python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --output data/processed/unified_cube.npz --unified --prefer-laz --workers 8
+# Creates cube with 1958 transects (10m spacing) × all epochs
+# Handles partial-coverage surveys with NaN for missing transects
+# Includes coverage_mask and beach_slices for easy extraction by beach
+
+# Test unified mode with limited files first
+python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --output data/processed/unified_test.npz --unified --prefer-laz --limit 5 --workers 1
 
 # Subset existing cube by MOP range
 python scripts/processing/subset_transects.py --input data/processed/all_transects.npz --output data/processed/delmar.npz --beach delmar
@@ -524,17 +533,31 @@ Survey CSV files use MOP1/MOP2 columns to indicate coverage range per survey.
 
 ### Data Processing Conventions
 - **Transect extraction**: Use `ShapefileTransectExtractor` with predefined transect lines from shapefile
+- **Transect spacing**: 10m transects aligned with MOP lines (total ~1958 transects across study area)
 - **Transect resampling**: Always N=128 points, uniformly spaced along transect profile
 - **Buffer distance**: Default 1.0m around transect line for point collection
-- **Cube format**: Transects organized as (n_transects, T, N, 12) data cube for spatio-temporal attention
-  - T = number of LiDAR epochs (all time steps for each transect)
-  - Each transect has full temporal coverage (no missing timesteps expected)
-  - `las_sources` array maps to timestamps for temporal encoding
+- **Cube format**: Two modes available:
+  - **Per-beach mode** (`--beach`): Extracts only transects/epochs for one beach
+  - **Unified mode** (`--unified`): Pre-defines all transects and epochs, handles partial coverage
+- **Unified cube format**: Transects organized as (n_transects, n_epochs, N, 12) data cube
+  - `n_transects` = 1958 (all transects at 10m spacing across study area)
+  - `n_epochs` = number of survey files in CSV
+  - Includes `coverage_mask` (n_transects, n_epochs) boolean for which cells have data
+  - Includes `beach_slices` dict mapping beach name to (start_idx, end_idx) for easy extraction
+  - Includes `mop_ids` array with integer MOP IDs extracted from transect strings
+  - Partial-coverage surveys fill only their MOP range, rest is NaN
+- **Beach slice indices** (non-overlapping):
+  - blacks: 0-479 (479 transects, MOP 520-567)
+  - torrey: 479-609 (130 transects, MOP 568-581)
+  - delmar: 609-857 (248 transects, MOP 595-620)
+  - solana: 857-1145 (288 transects, MOP 637-666)
+  - sanelijo: 1145-1408 (263 transects, MOP 683-708)
+  - encinitas: 1408-1958 (550 transects, MOP 709-764)
 - **Feature normalization**: Intensity and RGB normalized to [0,1], classification as discrete codes
 - **Wave timesteps**: 6-hourly for capturing storm dynamics (T_w = 360 for 90 days)
 - **Precip timesteps**: Daily for antecedent moisture (T_p = 90 for 90 days)
 - **Temporal alignment**: Environmental data aligned to most recent scan date; model learns from full temporal sequence
-- **Missing data**: Interpolate or flag - never silently fill with zeros
+- **Missing data**: In unified mode, missing transect-epoch pairs are NaN (use coverage_mask to filter)
 
 ### Wave Data (CDIP MOP System)
 

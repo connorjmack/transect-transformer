@@ -173,7 +173,7 @@ Transect data is stored in a **cube format** to enable spatio-temporal attention
 #   N = 128 points per transect
 #   12 = number of per-point features
 
-# NPZ file structure after cube conversion:
+# NPZ file structure after cube conversion (per-beach mode):
 {
     'points': (n_transects, T, N, 12),    # Point features cube
     'distances': (n_transects, T, N),      # Distance along transect
@@ -184,7 +184,28 @@ Transect data is stored in a **cube format** to enable spatio-temporal attention
     'feature_names': [...],                # 12 feature names
     'metadata_names': [...],               # 12 metadata field names
 }
+
+# NPZ file structure (unified mode - recommended for full study area):
+{
+    'points': (1958, n_epochs, 128, 12),   # Point features (NaN for missing)
+    'distances': (1958, n_epochs, 128),    # Distance along transect
+    'metadata': (1958, n_epochs, 12),      # Per-epoch metadata
+    'timestamps': (n_epochs,),             # Ordinal days (1D, shared across transects)
+    'transect_ids': (1958,),               # Full transect ID strings ("MOP 520", "MOP 520_001", etc.)
+    'mop_ids': (1958,),                    # Integer MOP IDs extracted from transect strings
+    'coverage_mask': (1958, n_epochs),     # Boolean: True where data exists
+    'beach_slices': dict,                  # {'blacks': (0, 479), 'torrey': (479, 609), ...}
+    'epoch_files': (n_epochs,),            # Original LAS filenames
+    'epoch_dates': (n_epochs,),            # ISO date strings
+    'epoch_mop_ranges': (n_epochs, 2),     # [MOP1, MOP2] coverage per survey
+    'feature_names': [...],                # 12 feature names
+    'metadata_names': [...],               # 12 metadata field names
+}
 ```
+
+**Unified mode benefits**: Pre-defines all 1958 transects (10m spacing) and all epochs from survey CSV.
+Partial-coverage surveys (e.g., a survey covering only Del Mar) fill their MOP range with data,
+leaving other transects as NaN. Use `coverage_mask` to filter valid transect-epoch pairs for training.
 
 ### Transect Input Features
 
@@ -1187,6 +1208,14 @@ python -c "from src.utils.config import load_config; cfg = load_config('configs/
 - [x] Create I/O parsers in `src/data/parsers/`
   - [x] `kml_parser.py` for KML/KMZ files
   - [x] `shapefile_parser.py` for ESRI shapefiles
+- [x] **Unified cube mode** (`--unified` flag) for multi-beach extraction
+  - [x] Pre-define transect dimension from shapefile (1958 transects at 10m spacing)
+  - [x] Pre-define epoch dimension from survey CSV
+  - [x] Handle partial-coverage surveys (surveys that cover only some MOPs)
+  - [x] Fill cube cells with data where available, NaN elsewhere
+  - [x] Track coverage with `coverage_mask` boolean array
+  - [x] Compute non-overlapping `beach_slices` for easy per-beach extraction
+  - [x] Include `mop_ids` array for integer MOP lookups
 
 **Test checkpoint**:
 ```python
@@ -1207,15 +1236,30 @@ assert transects['metadata'].shape[1] == 12, "Expected 12 metadata fields"
 print(f"Extracted {len(transects['points'])} transects")
 ```
 
-**CLI usage**:
+**CLI usage (per-beach mode)**:
 ```bash
-python scripts/processing/extract_transects.py \
-    --transects data/mops/transects_10m/transect_lines.shp \
-    --las-dir data/raw/lidar/ \
-    --output data/processed/transects.npz \
-    --buffer 1.0 \
-    --n-points 128 \
-    --visualize
+python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --beach delmar --output data/processed/delmar.npz --prefer-laz
+```
+
+**CLI usage (unified mode - recommended for full study area)**:
+```bash
+python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --output data/processed/unified_cube.npz --unified --prefer-laz --workers 8
+```
+
+**Unified cube output structure**:
+```python
+{
+    'points': (1958, n_epochs, 128, 12),      # Point features (NaN for missing)
+    'distances': (1958, n_epochs, 128),        # Distance along transect
+    'metadata': (1958, n_epochs, 12),          # Per-epoch metadata
+    'timestamps': (n_epochs,),                 # Ordinal days for each epoch
+    'transect_ids': (1958,),                   # Full transect ID strings
+    'mop_ids': (1958,),                        # Integer MOP IDs
+    'coverage_mask': (1958, n_epochs),         # Boolean: True where data exists
+    'beach_slices': {'blacks': (0, 479), 'torrey': (479, 609), ...},
+    'epoch_files': (n_epochs,),                # Original LAS filenames
+    'epoch_mop_ranges': (n_epochs, 2),         # [MOP1, MOP2] per survey
+}
 ```
 
 **Benefits of shapefile-based approach**:
@@ -1223,6 +1267,12 @@ python scripts/processing/extract_transects.py \
 - Works with any study site without coastline detection
 - Can use existing transect datasets (e.g., MOPS monitoring lines)
 - Better for irregular coastlines with caves, arches, or complex geometry
+
+**Benefits of unified mode**:
+- Consistent indexing across all surveys and beaches
+- Handles partial-coverage surveys gracefully (different surveys cover different MOP ranges)
+- Easy to extract per-beach subsets using `beach_slices`
+- Coverage tracking via `coverage_mask` for training data filtering
 
 #### 1.4 Wave Data Loader
 - [ ] Implement `src/data/wave_loader.py`

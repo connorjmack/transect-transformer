@@ -131,10 +131,16 @@ def load_cube(filepath: Path) -> Dict[str, np.ndarray]:
     return result
 
 
+def is_unified_cube(cube: Dict) -> bool:
+    """Check if this is a unified cube (has coverage_mask)."""
+    return 'coverage_mask' in cube
+
+
 def check_required_keys(cube: Dict, report: QCReport) -> bool:
     """Check that all required keys are present."""
     required_keys = ['points', 'distances', 'metadata', 'transect_ids']
     optional_keys = ['timestamps', 'epoch_names', 'epoch_dates', 'feature_names', 'metadata_names']
+    unified_keys = ['coverage_mask', 'beach_slices', 'mop_ids', 'epoch_files', 'epoch_mop_ranges']
 
     missing_required = [k for k in required_keys if k not in cube]
     if missing_required:
@@ -143,9 +149,20 @@ def check_required_keys(cube: Dict, report: QCReport) -> bool:
 
     present_optional = [k for k in optional_keys if k in cube]
     missing_optional = [k for k in optional_keys if k not in cube]
+    present_unified = [k for k in unified_keys if k in cube]
+
+    # Detect unified mode
+    if is_unified_cube(cube):
+        report.add_info("Cube format: UNIFIED (coverage_mask present)")
+        report.add_stat("cube_format", "unified")
+    else:
+        report.add_info("Cube format: per-beach (standard)")
+        report.add_stat("cube_format", "per-beach")
 
     report.add_info(f"Required keys present: {required_keys}")
     report.add_info(f"Optional keys present: {present_optional}")
+    if present_unified:
+        report.add_info(f"Unified mode keys present: {present_unified}")
     if missing_optional:
         report.add_info(f"Optional keys missing: {missing_optional}")
 
@@ -194,9 +211,16 @@ def check_shapes(cube: Dict, report: QCReport) -> Optional[Tuple[int, int, int, 
     # Check timestamps if present
     if 'timestamps' in cube:
         ts = cube['timestamps']
-        expected_ts_shape = (n_transects, n_epochs)
-        if ts.shape != expected_ts_shape:
-            report.error(f"timestamps shape {ts.shape} != expected {expected_ts_shape}")
+        if is_unified_cube(cube):
+            # Unified mode: timestamps is 1D (n_epochs,) - same for all transects
+            expected_ts_shape = (n_epochs,)
+            if ts.shape != expected_ts_shape:
+                report.error(f"timestamps shape {ts.shape} != expected {expected_ts_shape} (unified mode)")
+        else:
+            # Per-beach mode: timestamps is 2D (n_transects, n_epochs)
+            expected_ts_shape = (n_transects, n_epochs)
+            if ts.shape != expected_ts_shape:
+                report.error(f"timestamps shape {ts.shape} != expected {expected_ts_shape}")
 
     # Check epoch_names if present
     if 'epoch_names' in cube:
@@ -231,6 +255,7 @@ def check_missing_data(cube: Dict, report: QCReport, dims: Tuple[int, int, int, 
     """Check for NaN/missing values and coverage."""
     n_transects, n_epochs, n_points, n_features = dims
     points = cube['points']
+    unified = is_unified_cube(cube)
 
     # Check overall coverage using first feature of first point
     valid_mask = ~np.isnan(points[:, :, 0, 0])
@@ -249,7 +274,11 @@ def check_missing_data(cube: Dict, report: QCReport, dims: Tuple[int, int, int, 
         transects_with_data = valid_mask.any(axis=1).sum()
         if transects_with_data < n_transects:
             empty_transects = n_transects - transects_with_data
-            report.warning(f"{empty_transects} transects have no data in any epoch")
+            if unified:
+                # Expected in unified mode - just info, not warning
+                report.add_info(f"{empty_transects} transects have no data in any epoch (expected for partial-coverage surveys)")
+            else:
+                report.warning(f"{empty_transects} transects have no data in any epoch")
 
         # Check if any epochs are completely missing
         epochs_with_data = valid_mask.any(axis=0).sum()
@@ -257,10 +286,19 @@ def check_missing_data(cube: Dict, report: QCReport, dims: Tuple[int, int, int, 
             empty_epochs = n_epochs - epochs_with_data
             report.warning(f"{empty_epochs} epochs have no data for any transect")
 
-    if coverage_pct < 50:
-        report.warning(f"Low coverage: only {coverage_pct:.1f}% of transect-epochs have data")
-    elif coverage_pct < 80:
-        report.add_info(f"Moderate coverage: {coverage_pct:.1f}%")
+    # Coverage thresholds differ for unified vs per-beach mode
+    if unified:
+        # Unified mode: low coverage is expected with partial-coverage surveys
+        if coverage_pct < 10:
+            report.warning(f"Very low coverage: only {coverage_pct:.1f}% of transect-epochs have data")
+        elif coverage_pct < 50:
+            report.add_info(f"Low coverage: {coverage_pct:.1f}% (expected for unified mode with partial surveys)")
+    else:
+        # Per-beach mode: expect higher coverage
+        if coverage_pct < 50:
+            report.warning(f"Low coverage: only {coverage_pct:.1f}% of transect-epochs have data")
+        elif coverage_pct < 80:
+            report.add_info(f"Moderate coverage: {coverage_pct:.1f}%")
 
     # Check for partial NaN within valid transect-epochs
     for t in range(min(n_transects, 100)):  # Sample first 100
@@ -436,8 +474,9 @@ def check_temporal_consistency(cube: Dict, report: QCReport):
 
     if 'timestamps' in cube:
         timestamps = cube['timestamps']
-        # Check first row (all transects should have same timestamps)
-        if timestamps.shape[0] > 1:
+        # Only check for uniform timestamps in per-beach mode (2D timestamps)
+        # In unified mode, timestamps is already 1D so this check doesn't apply
+        if not is_unified_cube(cube) and timestamps.ndim == 2 and timestamps.shape[0] > 1:
             if not np.allclose(timestamps[0], timestamps[1:].mean(axis=0)):
                 report.warning("Timestamps vary across transects (expected uniform)")
 
@@ -471,6 +510,74 @@ def check_transect_ids(cube: Dict, report: QCReport):
     # Show sample IDs
     sample_ids = transect_ids[:5] if len(transect_ids) > 5 else transect_ids
     report.add_info(f"Sample transect IDs: {sample_ids}")
+
+
+def check_unified_specific(cube: Dict, report: QCReport, dims: Tuple[int, int, int, int]):
+    """Check unified-mode specific arrays."""
+    if not is_unified_cube(cube):
+        return
+
+    n_transects, n_epochs, _, _ = dims
+
+    # Check coverage_mask shape and consistency
+    if 'coverage_mask' in cube:
+        coverage_mask = cube['coverage_mask']
+        expected_shape = (n_transects, n_epochs)
+        if coverage_mask.shape != expected_shape:
+            report.error(f"coverage_mask shape {coverage_mask.shape} != expected {expected_shape}")
+        else:
+            report.add_info(f"coverage_mask shape OK: {coverage_mask.shape}")
+
+        # Check that coverage_mask matches actual data presence
+        points = cube['points']
+        actual_valid = ~np.isnan(points[:, :, 0, 0])
+        if not np.array_equal(coverage_mask, actual_valid):
+            mismatch = (coverage_mask != actual_valid).sum()
+            report.warning(f"coverage_mask has {mismatch} mismatches with actual data presence")
+
+    # Check beach_slices
+    if 'beach_slices' in cube:
+        beach_slices = cube['beach_slices']
+        if isinstance(beach_slices, np.ndarray):
+            beach_slices = beach_slices.item()
+
+        expected_beaches = ['blacks', 'torrey', 'delmar', 'solana', 'sanelijo', 'encinitas']
+        present_beaches = list(beach_slices.keys())
+
+        missing_beaches = [b for b in expected_beaches if b not in beach_slices]
+        if missing_beaches:
+            report.warning(f"Missing beach slices: {missing_beaches}")
+
+        # Check slices are non-overlapping and contiguous
+        prev_end = 0
+        for beach in expected_beaches:
+            if beach in beach_slices:
+                start, end = beach_slices[beach]
+                if start < prev_end:
+                    report.error(f"Beach {beach} slice [{start}, {end}) overlaps with previous (ends at {prev_end})")
+                if start > prev_end:
+                    report.add_info(f"Gap between beaches: indices {prev_end}-{start}")
+                n_beach_transects = end - start
+                report.add_info(f"Beach {beach}: indices {start}-{end} ({n_beach_transects} transects)")
+                prev_end = end
+
+    # Check mop_ids
+    if 'mop_ids' in cube:
+        mop_ids = cube['mop_ids']
+        if len(mop_ids) != n_transects:
+            report.error(f"mop_ids length {len(mop_ids)} != n_transects {n_transects}")
+        else:
+            valid_mops = mop_ids[mop_ids > 0]
+            if len(valid_mops) > 0:
+                report.add_info(f"MOP ID range: {valid_mops.min()} - {valid_mops.max()}")
+
+    # Check epoch_mop_ranges
+    if 'epoch_mop_ranges' in cube:
+        epoch_mop_ranges = cube['epoch_mop_ranges']
+        if epoch_mop_ranges.shape[0] != n_epochs:
+            report.error(f"epoch_mop_ranges has {epoch_mop_ranges.shape[0]} rows, expected {n_epochs}")
+        else:
+            report.add_info(f"epoch_mop_ranges shape OK: {epoch_mop_ranges.shape}")
 
 
 def check_spatial_distribution(cube: Dict, report: QCReport, dims: Tuple[int, int, int, int]):
@@ -543,6 +650,7 @@ def run_qc(filepath: Path, verbose: bool = False) -> QCReport:
     check_value_ranges(cube, report, dims)
     check_temporal_consistency(cube, report)
     check_transect_ids(cube, report)
+    check_unified_specific(cube, report, dims)
     check_spatial_distribution(cube, report, dims)
 
     return report

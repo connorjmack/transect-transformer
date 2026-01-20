@@ -195,7 +195,7 @@ class ShapefileTransectExtractor:
 
     def __init__(
         self,
-        n_points: int = 128,
+        n_points: int = 256,
         buffer_m: float = 1.0,
         min_points: int = 20,
     ):

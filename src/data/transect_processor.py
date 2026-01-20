@@ -210,6 +210,9 @@ class TransectProcessor:
         window_end_m = np.full((n_transects, n_epochs), np.nan, dtype=np.float32)
         toe_distance_m = np.full((n_transects, n_epochs), np.nan, dtype=np.float32)
         top_distance_m = np.full((n_transects, n_epochs), np.nan, dtype=np.float32)
+        # Relative positions within the processed transect (0 = window start)
+        toe_relative_m = np.full((n_transects, n_epochs), np.nan, dtype=np.float32)
+        top_relative_m = np.full((n_transects, n_epochs), np.nan, dtype=np.float32)
         delineation_confidence = np.full((n_transects, n_epochs), np.nan, dtype=np.float32)
         used_fallback = np.zeros((n_transects, n_epochs), dtype=bool)
 
@@ -263,6 +266,7 @@ class TransectProcessor:
 
                     toe_distance_m[t_idx, e_idx] = toe_dist
                     top_distance_m[t_idx, e_idx] = top_dist
+                    # Relative positions (will be computed after win_start is finalized)
                     delineation_confidence[t_idx, e_idx] = (
                         toe_confidences[t_idx, e_idx] + top_confidences[t_idx, e_idx]
                     ) / 2.0
@@ -281,6 +285,11 @@ class TransectProcessor:
                 # Store window bounds
                 window_start_m[t_idx, e_idx] = win_start
                 window_end_m[t_idx, e_idx] = win_end
+
+                # Compute relative toe/top positions (relative to window start)
+                if has_cliff[t_idx, e_idx] and not used_fallback[t_idx, e_idx]:
+                    toe_relative_m[t_idx, e_idx] = toe_distances[t_idx, e_idx] - win_start
+                    top_relative_m[t_idx, e_idx] = top_distances[t_idx, e_idx] - win_start
 
                 # Process this transect-epoch
                 processed = self._process_single(
@@ -307,6 +316,8 @@ class TransectProcessor:
             window_end_m = window_end_m[:, 0]
             toe_distance_m = toe_distance_m[:, 0]
             top_distance_m = top_distance_m[:, 0]
+            toe_relative_m = toe_relative_m[:, 0]
+            top_relative_m = top_relative_m[:, 0]
             delineation_confidence = delineation_confidence[:, 0]
             used_fallback = used_fallback[:, 0]
 
@@ -316,11 +327,16 @@ class TransectProcessor:
             'distances': out_distances,
             'metadata': out_metadata,
 
-            # Window information
+            # Window information (absolute coordinates)
             'window_start_m': window_start_m,
             'window_end_m': window_end_m,
             'toe_distance_m': toe_distance_m,
             'top_distance_m': top_distance_m,
+
+            # Cliff positions relative to window start (use these to locate toe/top in processed transect)
+            'toe_relative_m': toe_relative_m,
+            'top_relative_m': top_relative_m,
+
             'delineation_confidence': delineation_confidence,
             'used_fallback': used_fallback,
 

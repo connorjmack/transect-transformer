@@ -302,7 +302,13 @@ def compute_temporal_change(
 
 def has_cliff_data(data: dict[str, Any]) -> bool:
     """Check if cliff detection data is available in the dataset."""
-    return 'toe_distances' in data and 'top_distances' in data
+    # Check for raw format (from extraction with cliff detection)
+    if 'toe_distances' in data and 'top_distances' in data:
+        return True
+    # Check for processed format (from transect_processor)
+    if 'toe_relative_m' in data and 'top_relative_m' in data:
+        return True
+    return False
 
 
 def get_cliff_positions(
@@ -324,6 +330,20 @@ def get_cliff_positions(
     if not has_cliff_data(data):
         return None
 
+    # Check for processed format first (toe_relative_m, top_relative_m)
+    if 'toe_relative_m' in data:
+        return _get_cliff_positions_processed(data, transect_idx, epoch_idx)
+
+    # Original raw format (toe_distances, top_distances, has_cliff)
+    return _get_cliff_positions_raw(data, transect_idx, epoch_idx)
+
+
+def _get_cliff_positions_raw(
+    data: dict[str, Any],
+    transect_idx: int,
+    epoch_idx: int
+) -> dict[str, Any] | None:
+    """Get cliff positions from raw extraction format."""
     has_cliff = data['has_cliff']
     toe_distances = data['toe_distances']
     top_distances = data['top_distances']
@@ -358,6 +378,55 @@ def get_cliff_positions(
             'toe_confidence': float(toe_confidences[transect_idx]) if toe_confidences is not None else None,
             'top_confidence': float(top_confidences[transect_idx]) if top_confidences is not None else None,
         }
+
+
+def _get_cliff_positions_processed(
+    data: dict[str, Any],
+    transect_idx: int,
+    epoch_idx: int
+) -> dict[str, Any] | None:
+    """Get cliff positions from processed format (transect_processor output)."""
+    toe_relative = data['toe_relative_m']
+    top_relative = data['top_relative_m']
+    distances = data['distances']
+    delineation_conf = data.get('delineation_confidence')
+    used_fallback = data.get('used_fallback')
+
+    # Handle both cube (n_transects, n_epochs) and flat (n_transects,) formats
+    if toe_relative.ndim == 2:
+        toe_dist = toe_relative[transect_idx, epoch_idx]
+        top_dist = top_relative[transect_idx, epoch_idx]
+        trans_distances = distances[transect_idx, epoch_idx]
+        confidence = delineation_conf[transect_idx, epoch_idx] if delineation_conf is not None else None
+        is_fallback = used_fallback[transect_idx, epoch_idx] if used_fallback is not None else False
+    else:
+        toe_dist = toe_relative[transect_idx]
+        top_dist = top_relative[transect_idx]
+        trans_distances = distances[transect_idx]
+        confidence = delineation_conf[transect_idx] if delineation_conf is not None else None
+        is_fallback = used_fallback[transect_idx] if used_fallback is not None else False
+
+    # Check if cliff data is valid (not NaN and not fallback)
+    if np.isnan(toe_dist) or np.isnan(top_dist):
+        return None
+
+    # Skip fallback transects (no cliff detected, used full transect)
+    if is_fallback:
+        return None
+
+    # Find indices closest to toe/top distances
+    toe_idx = int(np.argmin(np.abs(trans_distances - toe_dist)))
+    top_idx = int(np.argmin(np.abs(trans_distances - top_dist)))
+
+    return {
+        'has_cliff': True,
+        'toe_distance': float(toe_dist),
+        'top_distance': float(top_dist),
+        'toe_idx': toe_idx,
+        'top_idx': top_idx,
+        'toe_confidence': float(confidence) if confidence is not None else None,
+        'top_confidence': float(confidence) if confidence is not None else None,
+    }
 
 
 def get_cliff_positions_by_id(

@@ -332,6 +332,14 @@ def main():
         help='Show detailed output'
     )
 
+    parser.add_argument(
+        '--max-size-gb',
+        type=float,
+        default=None,
+        help='Skip files larger than this size in GB (e.g., --max-size-gb 2.0 to skip files >2GB). '
+             'Useful when large files cause OOM kills (exit code -9).'
+    )
+
     args = parser.parse_args()
 
     # Validate mutually exclusive flags
@@ -413,6 +421,10 @@ def main():
     skipped_existing = 0
     skipped_missing = 0
     skipped_already_copc = 0
+    skipped_too_large = 0
+    skipped_large_files: List[Tuple[Path, float]] = []  # (path, size_gb)
+
+    max_size_bytes = args.max_size_gb * 1024 * 1024 * 1024 if args.max_size_gb else None
 
     for las_path in las_paths:
         # Skip files that are already COPC
@@ -433,6 +445,17 @@ def main():
             print(f"  Warning: File not found: {las_path}")
             continue
 
+        # Skip files that exceed max size (OOM protection)
+        if max_size_bytes is not None:
+            file_size = las_path.stat().st_size
+            if file_size > max_size_bytes:
+                size_gb = file_size / (1024 * 1024 * 1024)
+                skipped_too_large += 1
+                skipped_large_files.append((las_path, size_gb))
+                if args.verbose:
+                    print(f"  Skipping (>{args.max_size_gb:.1f}GB): {las_path.name} ({size_gb:.2f} GB)")
+                continue
+
         conversions.append((las_path, copc_path))
 
     # Print summary
@@ -443,6 +466,13 @@ def main():
     print(f"  Skipped (COPC exists): {skipped_existing}")
     print(f"  Skipped (already COPC): {skipped_already_copc}")
     print(f"  Skipped (file missing): {skipped_missing}")
+    if skipped_too_large > 0:
+        print(f"  Skipped (too large): {skipped_too_large}")
+        print(f"\n  Large files skipped (>{args.max_size_gb:.1f} GB):")
+        for path, size_gb in skipped_large_files[:10]:
+            print(f"    - {path.name} ({size_gb:.2f} GB)")
+        if len(skipped_large_files) > 10:
+            print(f"    ... and {len(skipped_large_files) - 10} more")
 
     if args.dry_run:
         print(f"\n{'='*60}")

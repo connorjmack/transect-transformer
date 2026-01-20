@@ -47,6 +47,10 @@ transect-transformer/
 │   │   ├── cdip_wave_loader.py    # CDIP THREDDS/OPeNDAP wave data access ✅
 │   │   ├── wave_loader.py         # Wave data integration for training ✅
 │   │   ├── atmos_loader.py        # Atmospheric data integration ✅
+│   │   ├── cliff_delineation/     # Cliff toe/top detection (CliffDelineaTool v2.0) ✅
+│   │   │   ├── feature_adapter.py # Transform features for cliff model
+│   │   │   ├── model_wrapper.py   # CNN-BiLSTM model inference
+│   │   │   └── detector.py        # NPZ processing and results
 │   │   ├── spatial_filter.py      # Spatial filtering utilities
 │   │   ├── README.md              # Data module documentation
 │   │   └── __init__.py
@@ -56,7 +60,8 @@ transect-transformer/
 ├── scripts/
 │   ├── processing/                # Data pipeline scripts
 │   │   ├── extract_transects.py   # Transect extraction CLI
-│   │   └── download_cdip_data.py  # Batch download CDIP wave data ✅
+│   │   ├── download_cdip_data.py  # Batch download CDIP wave data ✅
+│   │   └── detect_cliff_edges.py  # Cliff toe/top detection CLI ✅
 │   ├── visualization/             # Visualization and plotting ✅
 │   │   ├── README.md              # Visualization documentation ✅
 │   │   ├── quick_wave_summary.py  # Quick 4-panel wave overview ✅
@@ -72,6 +77,7 @@ transect-transformer/
 │   │   ├── test_transect_extractor.py  # Extractor + cube format tests (30 tests)
 │   │   ├── test_wave_loader.py         # Wave loader tests (18 tests) ✅
 │   │   ├── test_atmos_loader.py        # Atmospheric loader tests (27 tests)
+│   │   ├── test_cliff_delineation.py   # Cliff detection tests (20 tests) ✅
 │   │   └── test_prism_download.py      # PRISM download tests
 │   ├── test_apps/                 # Application tests
 │   │   └── test_transect_viewer.py     # Viewer data_loader + validators (27 tests)
@@ -170,6 +176,13 @@ python scripts/processing/subset_transects.py --input data/processed/all_transec
 # Download CDIP wave data
 python scripts/processing/download_cdip_data.py --output data/raw/cdip/ --beach delmar
 # Or use --start-date/--end-date, --mop-min/--mop-max, --verify-only
+
+# Detect cliff toe/top edges using CliffDelineaTool v2.0
+# Prerequisites: pip install -e /path/to/CliffDelineaTool_2.0/v2
+python scripts/processing/detect_cliff_edges.py --input data/processed/delmar.npz --checkpoint /path/to/best_model.pth
+# Or set CLIFF_DELINEA_CHECKPOINT environment variable
+# Output: delmar.cliff.npz (sidecar file with toe/top distances, indices, confidences)
+# Use --metrics-only to view existing results without re-running detection
 ```
 
 ### Interactive Apps
@@ -423,6 +436,41 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
 7. **TransectVoxelizer** (`src/data/transect_voxelizer.py`): Alternative voxel-based extraction (unused)
    - Bins points along transect into 1D segments
    - More robust to variable point density but currently not used
+
+8. **CliffDelineation** (`src/data/cliff_delineation/`): Cliff toe/top detection via CNN-BiLSTM
+   - Uses pre-trained CliffDelineaTool v2.0 model for automatic cliff edge detection
+   - **Prerequisite**: Install CliffDelineaTool as editable package: `pip install -e /path/to/CliffDelineaTool_2.0/v2`
+   - **CliffFeatureAdapter**: Transforms 12 transect-transformer features → 13 CliffDelineaTool features
+     - Computes: normalized elevation/distance, gradient, curvature, seaward/landward slopes, trendline deviation, convexity, relative elevation, low elevation zone, shore proximity, max local slope
+   - **CliffDelineationModel**: Loads checkpoint, runs CNN-BiLSTM inference, extracts toe/top from segmentation probabilities
+   - **detect_cliff_edges()**: Main entry point, processes NPZ files and saves results to sidecar file
+   - **Output format**: `*.cliff.npz` sidecar file containing:
+     - `toe_distances`, `top_distances`: (n_transects, T) distances along transect (-1 if none)
+     - `toe_indices`, `top_indices`: (n_transects, T) point indices (0-127)
+     - `toe_confidences`, `top_confidences`: (n_transects, T) model confidence [0,1]
+     - `has_cliff`: (n_transects, T) boolean detection flag
+   - **Usage**:
+     ```python
+     from src.data.cliff_delineation import detect_cliff_edges, load_cliff_results
+     from src.data.cliff_delineation.detector import get_cliff_metrics
+
+     # Run detection
+     results = detect_cliff_edges(
+         npz_path='data/processed/delmar.npz',
+         checkpoint_path='/path/to/best_model.pth',
+         confidence_threshold=0.5,
+         n_vert=20,  # Must match training config
+     )
+
+     # Load existing results
+     results = load_cliff_results('data/processed/delmar.cliff.npz')
+
+     # Get summary metrics
+     metrics = get_cliff_metrics(results)
+     print(f"Detection rate: {metrics['detection_rate']:.1%}")
+     print(f"Mean cliff width: {metrics['mean_cliff_width_m']:.1f} m")
+     ```
+   - **TODO (Future)**: Option to merge cliff results directly into main NPZ file
 
 ### Data Flow
 

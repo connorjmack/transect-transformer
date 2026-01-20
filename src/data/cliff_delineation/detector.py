@@ -229,6 +229,192 @@ def load_cliff_results(
     return {key: data[key] for key in data.keys()}
 
 
+def detect_and_merge(
+    npz_path: Union[str, Path],
+    checkpoint_path: Union[str, Path],
+    output_path: Optional[Union[str, Path]] = None,
+    confidence_threshold: float = 0.5,
+    n_vert: int = 20,
+    device: str = "auto",
+    show_progress: bool = True,
+) -> Path:
+    """
+    Run cliff detection and create a new NPZ with results merged in.
+
+    Creates a copy of the original NPZ file with cliff detection arrays added.
+    Original file is not modified.
+
+    Args:
+        npz_path: Path to transect-transformer NPZ file (cube or flat format).
+        checkpoint_path: Path to CliffDelineaTool checkpoint.
+        output_path: Where to save merged file. If None, uses npz_path with '_with_cliffs' suffix.
+        confidence_threshold: Confidence threshold for detection.
+        n_vert: Local slope window size (must match CliffDelineaTool training).
+        device: 'cuda', 'cpu', or 'auto'.
+        show_progress: Show progress bar.
+
+    Returns:
+        Path to the merged output file.
+
+    The merged NPZ contains all original arrays plus:
+        - toe_distances: (n_transects, T) or (n_transects,) distance along transect
+        - top_distances: (n_transects, T) or (n_transects,) distance along transect
+        - toe_indices: (n_transects, T) or (n_transects,) point index (0-127)
+        - top_indices: (n_transects, T) or (n_transects,) point index (0-127)
+        - toe_confidences: (n_transects, T) or (n_transects,) model confidence [0,1]
+        - top_confidences: (n_transects, T) or (n_transects,) model confidence [0,1]
+        - has_cliff: (n_transects, T) or (n_transects,) boolean detection flag
+        - cliff_detection_metadata: dict with model info
+    """
+    npz_path = Path(npz_path)
+
+    if not npz_path.exists():
+        raise FileNotFoundError(f"NPZ file not found: {npz_path}")
+
+    logger.info(f"Loading transect data from {npz_path}")
+
+    # Load original NPZ
+    original_data = np.load(npz_path, allow_pickle=True)
+    points = original_data["points"]
+    distances = original_data["distances"]
+
+    # Check format (cube vs flat)
+    if points.ndim == 4:
+        n_transects, n_epochs, n_points, n_features = points.shape
+        is_cube = True
+        logger.info(
+            f"Cube format: {n_transects} transects x {n_epochs} epochs x {n_points} points"
+        )
+    elif points.ndim == 3:
+        n_transects, n_points, n_features = points.shape
+        n_epochs = 1
+        is_cube = False
+        logger.info(f"Flat format: {n_transects} transects x {n_points} points")
+        # Add epoch dimension for uniform processing
+        points_proc = points[:, np.newaxis, :, :]
+        distances_proc = distances[:, np.newaxis, :]
+    else:
+        raise ValueError(f"Unexpected points shape: {points.shape}")
+
+    if is_cube:
+        points_proc = points
+        distances_proc = distances
+
+    # Initialize components
+    logger.info("Initializing feature adapter and model...")
+    adapter = CliffFeatureAdapter(n_vert=n_vert)
+    model = CliffDelineationModel(
+        checkpoint_path=checkpoint_path,
+        device=device,
+        confidence_threshold=confidence_threshold,
+    )
+
+    # Prepare output arrays
+    toe_distances = np.full((n_transects, n_epochs), -1.0, dtype=np.float32)
+    top_distances = np.full((n_transects, n_epochs), -1.0, dtype=np.float32)
+    toe_indices = np.full((n_transects, n_epochs), -1, dtype=np.int32)
+    top_indices = np.full((n_transects, n_epochs), -1, dtype=np.int32)
+    toe_confidences = np.zeros((n_transects, n_epochs), dtype=np.float32)
+    top_confidences = np.zeros((n_transects, n_epochs), dtype=np.float32)
+    has_cliff = np.zeros((n_transects, n_epochs), dtype=bool)
+
+    # Process each transect-epoch
+    total = n_transects * n_epochs
+    logger.info(f"Processing {total} transect-epochs...")
+
+    iterator = range(total)
+    if show_progress and HAS_TQDM:
+        iterator = tqdm(iterator, desc="Detecting cliff edges", unit="transect")
+
+    n_valid = 0
+    n_detected = 0
+
+    for flat_idx in iterator:
+        t_idx = flat_idx // n_epochs
+        e_idx = flat_idx % n_epochs
+
+        # Check for NaN (missing data)
+        if np.isnan(points_proc[t_idx, e_idx, 0, 0]):
+            continue
+
+        n_valid += 1
+
+        # Transform features to CliffDelineaTool format
+        cliff_features = adapter.transform(
+            points_proc[t_idx, e_idx], distances_proc[t_idx, e_idx]
+        )
+
+        # Run detection
+        result = model.predict(
+            cliff_features, distances_proc[t_idx, e_idx], confidence_threshold
+        )
+
+        # Store results
+        toe_distances[t_idx, e_idx] = result["toe_distance"]
+        top_distances[t_idx, e_idx] = result["top_distance"]
+        toe_indices[t_idx, e_idx] = result["toe_idx"]
+        top_indices[t_idx, e_idx] = result["top_idx"]
+        toe_confidences[t_idx, e_idx] = result["toe_confidence"]
+        top_confidences[t_idx, e_idx] = result["top_confidence"]
+        has_cliff[t_idx, e_idx] = result["has_cliff"]
+
+        if result["has_cliff"]:
+            n_detected += 1
+
+    # Remove epoch dim if original was flat
+    if not is_cube:
+        toe_distances = toe_distances[:, 0]
+        top_distances = top_distances[:, 0]
+        toe_indices = toe_indices[:, 0]
+        top_indices = top_indices[:, 0]
+        toe_confidences = toe_confidences[:, 0]
+        top_confidences = top_confidences[:, 0]
+        has_cliff = has_cliff[:, 0]
+
+    # Build merged output dict - start with all original data
+    merged = {}
+    for key in original_data.keys():
+        merged[key] = original_data[key]
+
+    # Add cliff detection results
+    merged["toe_distances"] = toe_distances
+    merged["top_distances"] = top_distances
+    merged["toe_indices"] = toe_indices
+    merged["top_indices"] = top_indices
+    merged["toe_confidences"] = toe_confidences
+    merged["top_confidences"] = top_confidences
+    merged["has_cliff"] = has_cliff
+
+    # Add detection metadata
+    merged["cliff_detection_metadata"] = np.array({
+        "model_checkpoint": str(Path(checkpoint_path).name),
+        "confidence_threshold": confidence_threshold,
+        "n_vert": n_vert,
+        "n_valid": n_valid,
+        "n_detected": n_detected,
+    })
+
+    # Determine output path
+    if output_path is None:
+        stem = npz_path.stem
+        output_path = npz_path.parent / f"{stem}_with_cliffs.npz"
+    else:
+        output_path = Path(output_path)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(output_path, **merged)
+
+    # Report summary
+    detection_rate = (n_detected / n_valid * 100) if n_valid > 0 else 0
+    logger.info(
+        f"Cliff detection complete: {n_detected}/{n_valid} transect-epochs "
+        f"with detected cliffs ({detection_rate:.1f}%)"
+    )
+    logger.info(f"Merged file saved to: {output_path}")
+
+    return output_path
+
+
 def get_cliff_metrics(results: Dict[str, np.ndarray]) -> Dict[str, float]:
     """
     Compute summary metrics from cliff detection results.

@@ -14,6 +14,8 @@ from apps.transect_viewer.utils.data_loader import (
     get_epoch_dates,
     is_cube_format,
     get_epoch_slice,
+    has_cliff_data,
+    get_cliff_positions_by_id,
 )
 
 
@@ -188,6 +190,9 @@ def _render_multi_transect_comparison(data: dict, epoch_idx: int, is_cube: bool)
     # Create comparison plot
     fig = go.Figure()
 
+    # Check if cliff data is available
+    show_cliff_markers = has_cliff_data(data) and selected_feature == 'elevation_m'
+
     for i, tid in enumerate(selected_ids):
         # Get transect for specific epoch
         transect = get_transect_by_id(data, tid, epoch_idx=epoch_idx)
@@ -200,6 +205,33 @@ def _render_multi_transect_comparison(data: dict, epoch_idx: int, is_cube: bool)
             name=f"T-{tid}",
             line=dict(color=color, width=2),
         ))
+
+        # Add cliff markers if showing elevation
+        if show_cliff_markers:
+            cliff_pos = get_cliff_positions_by_id(data, tid, epoch_idx)
+            if cliff_pos is not None:
+                toe_idx = cliff_pos.get('toe_idx')
+                top_idx = cliff_pos.get('top_idx')
+                if toe_idx is not None and top_idx is not None:
+                    points = transect['points']
+                    # Toe marker
+                    fig.add_trace(go.Scatter(
+                        x=[cliff_pos['toe_distance']],
+                        y=[points[toe_idx, feature_idx]],
+                        mode='markers',
+                        name=f'Toe T-{tid}',
+                        marker=dict(color=color, size=10, symbol='triangle-up', line=dict(color='white', width=1)),
+                        showlegend=False,
+                    ))
+                    # Top marker
+                    fig.add_trace(go.Scatter(
+                        x=[cliff_pos['top_distance']],
+                        y=[points[top_idx, feature_idx]],
+                        mode='markers',
+                        name=f'Top T-{tid}',
+                        marker=dict(color=color, size=10, symbol='triangle-down', line=dict(color='white', width=1)),
+                        showlegend=False,
+                    ))
 
     unit = config.FEATURE_UNITS.get(selected_feature, '')
     fig.update_layout(

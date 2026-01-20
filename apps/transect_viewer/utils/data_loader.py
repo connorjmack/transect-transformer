@@ -300,6 +300,139 @@ def compute_temporal_change(
     }
 
 
+def has_cliff_data(data: dict[str, Any]) -> bool:
+    """Check if cliff detection data is available in the dataset."""
+    return 'toe_distances' in data and 'top_distances' in data
+
+
+def get_cliff_positions(
+    data: dict[str, Any],
+    transect_idx: int,
+    epoch_idx: int
+) -> dict[str, Any] | None:
+    """
+    Get cliff toe and top positions for a specific transect-epoch.
+
+    Args:
+        data: Full dataset (must contain cliff detection arrays)
+        transect_idx: Index of transect in the data arrays
+        epoch_idx: Epoch index
+
+    Returns:
+        Dictionary with toe/top info, or None if no cliff detected
+    """
+    if not has_cliff_data(data):
+        return None
+
+    has_cliff = data['has_cliff']
+    toe_distances = data['toe_distances']
+    top_distances = data['top_distances']
+    toe_indices = data.get('toe_indices')
+    top_indices = data.get('top_indices')
+    toe_confidences = data.get('toe_confidences')
+    top_confidences = data.get('top_confidences')
+
+    # Handle both cube (n_transects, n_epochs) and flat (n_transects,) formats
+    if has_cliff.ndim == 2:
+        if not has_cliff[transect_idx, epoch_idx]:
+            return None
+        return {
+            'has_cliff': True,
+            'toe_distance': float(toe_distances[transect_idx, epoch_idx]),
+            'top_distance': float(top_distances[transect_idx, epoch_idx]),
+            'toe_idx': int(toe_indices[transect_idx, epoch_idx]) if toe_indices is not None else None,
+            'top_idx': int(top_indices[transect_idx, epoch_idx]) if top_indices is not None else None,
+            'toe_confidence': float(toe_confidences[transect_idx, epoch_idx]) if toe_confidences is not None else None,
+            'top_confidence': float(top_confidences[transect_idx, epoch_idx]) if top_confidences is not None else None,
+        }
+    else:
+        # Flat format (single epoch)
+        if not has_cliff[transect_idx]:
+            return None
+        return {
+            'has_cliff': True,
+            'toe_distance': float(toe_distances[transect_idx]),
+            'top_distance': float(top_distances[transect_idx]),
+            'toe_idx': int(toe_indices[transect_idx]) if toe_indices is not None else None,
+            'top_idx': int(top_indices[transect_idx]) if top_indices is not None else None,
+            'toe_confidence': float(toe_confidences[transect_idx]) if toe_confidences is not None else None,
+            'top_confidence': float(top_confidences[transect_idx]) if top_confidences is not None else None,
+        }
+
+
+def get_cliff_positions_by_id(
+    data: dict[str, Any],
+    transect_id: int,
+    epoch_idx: int
+) -> dict[str, Any] | None:
+    """
+    Get cliff toe and top positions by transect ID.
+
+    Args:
+        data: Full dataset
+        transect_id: Transect ID to look up
+        epoch_idx: Epoch index
+
+    Returns:
+        Dictionary with toe/top info, or None if no cliff detected
+    """
+    if not has_cliff_data(data):
+        return None
+
+    transect_ids = data['transect_ids']
+    if isinstance(transect_ids, list):
+        transect_ids = np.array(transect_ids)
+
+    idx = np.where(transect_ids == transect_id)[0]
+    if len(idx) == 0:
+        return None
+    transect_idx = idx[0]
+
+    return get_cliff_positions(data, transect_idx, epoch_idx)
+
+
+def get_cliff_elevation_at_position(
+    data: dict[str, Any],
+    transect_idx: int,
+    epoch_idx: int,
+    cliff_pos: dict[str, Any]
+) -> dict[str, float] | None:
+    """
+    Get elevation values at cliff toe and top positions.
+
+    Args:
+        data: Full dataset
+        transect_idx: Transect index
+        epoch_idx: Epoch index
+        cliff_pos: Output from get_cliff_positions()
+
+    Returns:
+        Dictionary with toe_elevation and top_elevation
+    """
+    if cliff_pos is None:
+        return None
+
+    points = data['points']
+    toe_idx = cliff_pos.get('toe_idx')
+    top_idx = cliff_pos.get('top_idx')
+
+    if toe_idx is None or top_idx is None:
+        return None
+
+    # Get elevation (feature index 1)
+    if points.ndim == 4:
+        toe_elev = float(points[transect_idx, epoch_idx, toe_idx, 1])
+        top_elev = float(points[transect_idx, epoch_idx, top_idx, 1])
+    else:
+        toe_elev = float(points[transect_idx, toe_idx, 1])
+        top_elev = float(points[transect_idx, top_idx, 1])
+
+    return {
+        'toe_elevation': toe_elev,
+        'top_elevation': top_elev,
+    }
+
+
 def check_data_coverage(data: dict[str, Any]) -> dict[str, Any]:
     """
     Check data coverage across transects and epochs.

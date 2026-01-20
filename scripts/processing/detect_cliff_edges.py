@@ -3,7 +3,9 @@
 CLI script for running cliff edge detection on NPZ files.
 
 Detects cliff toe and cliff top positions using the CliffDelineaTool v2.0
-CNN-BiLSTM model. Results are saved in a sidecar file (*.cliff.npz).
+CNN-BiLSTM model. Results can be saved as:
+  - Sidecar file (*.cliff.npz) - detection results only (default)
+  - Merged file (*_with_cliffs.npz) - full copy with detection results integrated (--merge)
 
 Prerequisites:
     Install CliffDelineaTool as an editable package:
@@ -12,19 +14,20 @@ Prerequisites:
     ```
 
 Usage:
-    # Basic usage with explicit paths
+    # Basic usage - creates sidecar file (delmar.cliff.npz)
     python scripts/processing/detect_cliff_edges.py \\
         --input data/processed/delmar.npz \\
-        --checkpoint /path/to/CliffDelineaTool_2.0/v2/scripts/experiments/runs_all_aois/checkpoints/best_model.pth
+        --checkpoint /path/to/best_model.pth
+
+    # Merge mode - creates new file with cliff data integrated (delmar_with_cliffs.npz)
+    python scripts/processing/detect_cliff_edges.py \\
+        --input data/processed/delmar.npz \\
+        --checkpoint /path/to/best_model.pth \\
+        --merge
 
     # Using environment variables
     export CLIFF_DELINEA_CHECKPOINT=/path/to/best_model.pth
-    python scripts/processing/detect_cliff_edges.py --input data/processed/delmar.npz
-
-    # Batch processing multiple files
-    for f in data/processed/*.npz; do
-        python scripts/processing/detect_cliff_edges.py --input "$f"
-    done
+    python scripts/processing/detect_cliff_edges.py --input data/processed/delmar.npz --merge
 """
 
 import argparse
@@ -36,7 +39,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.data.cliff_delineation import detect_cliff_edges, load_cliff_results
+from src.data.cliff_delineation import detect_cliff_edges, detect_and_merge, load_cliff_results
 from src.data.cliff_delineation.detector import get_cliff_metrics
 
 
@@ -108,6 +111,12 @@ Examples:
         action="store_true",
         help="Only show metrics from existing .cliff.npz file (no detection)",
     )
+    parser.add_argument(
+        "--merge",
+        "-m",
+        action="store_true",
+        help="Create merged NPZ file with cliff results integrated (default: sidecar file)",
+    )
 
     args = parser.parse_args()
 
@@ -158,6 +167,7 @@ Examples:
         sys.exit(1)
 
     # Print banner
+    mode_str = "MERGE" if args.merge else "SIDECAR"
     print("=" * 70)
     print("Cliff Edge Detection using CliffDelineaTool v2.0")
     print("=" * 70)
@@ -166,19 +176,37 @@ Examples:
     print(f"Confidence:  {args.confidence}")
     print(f"n_vert:      {args.n_vert}")
     print(f"Device:      {args.device}")
+    print(f"Mode:        {mode_str}")
     print("=" * 70)
 
     # Run detection
     try:
-        results = detect_cliff_edges(
-            npz_path=args.input,
-            checkpoint_path=args.checkpoint,
-            output_path=args.output,
-            confidence_threshold=args.confidence,
-            n_vert=args.n_vert,
-            device=args.device,
-            show_progress=not args.quiet,
-        )
+        if args.merge:
+            # Merge mode: create new NPZ with cliff data integrated
+            output_path = detect_and_merge(
+                npz_path=args.input,
+                checkpoint_path=args.checkpoint,
+                output_path=args.output,
+                confidence_threshold=args.confidence,
+                n_vert=args.n_vert,
+                device=args.device,
+                show_progress=not args.quiet,
+            )
+            # Load results from merged file for metrics
+            import numpy as np
+            merged_data = np.load(output_path, allow_pickle=True)
+            results = {key: merged_data[key] for key in merged_data.keys()}
+        else:
+            # Sidecar mode: create separate cliff results file
+            results = detect_cliff_edges(
+                npz_path=args.input,
+                checkpoint_path=args.checkpoint,
+                output_path=args.output,
+                confidence_threshold=args.confidence,
+                n_vert=args.n_vert,
+                device=args.device,
+                show_progress=not args.quiet,
+            )
     except ImportError as e:
         print(f"\nError: {e}")
         print("\nMake sure CliffDelineaTool is installed:")

@@ -12,6 +12,8 @@ from apps.transect_viewer.utils.data_loader import (
     get_cube_dimensions,
     get_epoch_dates,
     is_cube_format,
+    has_cliff_data,
+    get_cliff_positions_by_id,
 )
 
 
@@ -156,8 +158,13 @@ def render_temporal_slider():
     # Compute fixed y-axis range from first valid epoch for consistent comparison
     y_range = _get_fixed_y_range_valid(data, transect_id, selected_feature, feature_names, valid_epochs)
 
+    # Get cliff positions if available
+    cliff_pos = None
+    if has_cliff_data(data):
+        cliff_pos = get_cliff_positions_by_id(data, transect_id, actual_epoch_idx)
+
     # Main profile plot
-    _render_profile_plot(transect, selected_feature, feature_names, epoch_labels[actual_epoch_idx], y_range)
+    _render_profile_plot(transect, selected_feature, feature_names, epoch_labels[actual_epoch_idx], y_range, cliff_pos)
 
     # Show context: small multiples of valid epochs only
     with st.expander("Show All Available Epochs Overview", expanded=False):
@@ -241,7 +248,8 @@ def _render_profile_plot(
     feature_name: str,
     feature_names: list,
     epoch_label: str,
-    y_range: tuple = None
+    y_range: tuple = None,
+    cliff_pos: dict = None
 ):
     """Render the main profile plot for current epoch."""
     points = transect['points']
@@ -264,13 +272,53 @@ def _render_profile_plot(
         fillcolor=f"rgba(31, 119, 180, 0.2)",
     ))
 
+    # Add cliff toe/top markers if available and showing elevation
+    if cliff_pos is not None and feature_name == 'elevation_m':
+        toe_dist = cliff_pos['toe_distance']
+        top_dist = cliff_pos['top_distance']
+        toe_idx = cliff_pos.get('toe_idx')
+        top_idx = cliff_pos.get('top_idx')
+
+        # Get elevations at toe/top
+        if toe_idx is not None and top_idx is not None:
+            toe_elev = points[toe_idx, feature_idx]
+            top_elev = points[top_idx, feature_idx]
+
+            # Add toe marker
+            fig.add_trace(go.Scatter(
+                x=[toe_dist],
+                y=[toe_elev],
+                mode='markers+text',
+                name='Cliff Toe',
+                marker=dict(color='#e74c3c', size=12, symbol='triangle-up'),
+                text=['Toe'],
+                textposition='bottom center',
+                textfont=dict(color='#e74c3c', size=10),
+            ))
+
+            # Add top marker
+            fig.add_trace(go.Scatter(
+                x=[top_dist],
+                y=[top_elev],
+                mode='markers+text',
+                name='Cliff Top',
+                marker=dict(color='#27ae60', size=12, symbol='triangle-down'),
+                text=['Top'],
+                textposition='top center',
+                textfont=dict(color='#27ae60', size=10),
+            ))
+
+            # Add vertical lines at toe/top
+            fig.add_vline(x=toe_dist, line_dash="dash", line_color="#e74c3c", opacity=0.5)
+            fig.add_vline(x=top_dist, line_dash="dash", line_color="#27ae60", opacity=0.5)
+
     unit = config.FEATURE_UNITS.get(feature_name, '')
     fig.update_layout(
         title=f"{feature_name} Profile - {epoch_label}",
         xaxis_title="Distance from Toe (m)",
         yaxis_title=f"{feature_name} ({unit})" if unit else feature_name,
         height=450,
-        showlegend=False,
+        showlegend=cliff_pos is not None and feature_name == 'elevation_m',
     )
 
     # Fix y-axis range for consistent comparison across epochs

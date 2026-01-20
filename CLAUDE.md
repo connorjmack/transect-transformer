@@ -21,14 +21,30 @@ When providing Python or shell commands for the user to copy and paste, **always
 
 **Core Architecture**: Spatio-temporal attention over cliff geometry sequences (multiple LiDAR epochs per transect), followed by cross-attention fusion with environmental embeddings (wave + precipitation encoders), and multi-task prediction heads. The temporal dimension captures cliff evolution over time, which is critical for predicting future failures.
 
+## Project History
+
+When starting a new phase or needing context on past decisions, read `docs/project-evolution.md`.
+
+**Document hierarchy** (read on-demand, not auto-loaded):
+- `docs/model_plan.md` - Target architecture spec
+- `docs/plan.md` - Actionable implementation checklist
+- `docs/project-evolution.md` - Completed phases, key decisions, lessons learned
+- `docs/archive/plan_v1_spec.md` - Original 2600-line spec (historical)
+
 ## Directory Structure
 
 ```
 transect-transformer/
+├── .claude/
+│   └── settings.json              # Claude Code settings
 ├── docs/                          # Project documentation and planning
-│   ├── plan.md                    # Implementation phases and roadmap
+│   ├── plan.md                    # Implementation checklist (actionable tasks)
+│   ├── model_plan.md              # Target architecture specification
+│   ├── project-evolution.md       # Completed phases, decisions, lessons learned
 │   ├── todo.md                    # Current tasks and progress
-│   └── DATA_REQUIREMENTS.md       # Data collection requirements
+│   ├── DATA_REQUIREMENTS.md       # Data schemas and validation rules
+│   └── archive/
+│       └── plan_v1_spec.md        # Original detailed spec (historical)
 ├── apps/                          # Interactive applications
 │   └── transect_viewer/           # Streamlit transect visualization app
 │       ├── app.py                 # Main entry point

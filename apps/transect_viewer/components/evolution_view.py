@@ -14,6 +14,8 @@ from apps.transect_viewer.utils.data_loader import (
     get_epoch_dates,
     is_cube_format,
     get_all_transect_ids,
+    has_cliff_data,
+    get_cliff_positions_by_id,
 )
 from apps.transect_viewer.utils.validators import compute_temporal_statistics
 
@@ -114,6 +116,9 @@ def _render_temporal_comparison(
 
     fig = go.Figure()
 
+    # Track valid epochs for cliff markers
+    valid_epochs = []
+
     for t in range(n_epochs):
         epoch_label = dates[t][:10] if dates else f"Epoch {t}"
         color = config.EPOCH_COLORS[t % len(config.EPOCH_COLORS)]
@@ -122,6 +127,8 @@ def _render_temporal_comparison(
         if np.all(np.isnan(values[t])):
             continue
 
+        valid_epochs.append(t)
+
         fig.add_trace(go.Scatter(
             x=distances[t],
             y=values[t],
@@ -129,6 +136,71 @@ def _render_temporal_comparison(
             name=epoch_label,
             line=dict(color=color, width=2),
         ))
+
+    # Add cliff markers for first and last valid epochs if showing elevation
+    if has_cliff_data(data) and feature_name == 'elevation_m' and len(valid_epochs) >= 1:
+        feature_idx = feature_names.index(feature_name) if feature_name in feature_names else 1
+
+        # First valid epoch cliff markers
+        first_epoch = valid_epochs[0]
+        cliff_pos_first = get_cliff_positions_by_id(data, transect_id, first_epoch)
+        if cliff_pos_first is not None:
+            toe_idx = cliff_pos_first.get('toe_idx')
+            top_idx = cliff_pos_first.get('top_idx')
+            if toe_idx is not None and top_idx is not None:
+                first_label = dates[first_epoch][:10] if dates else f"E{first_epoch}"
+                color_first = config.EPOCH_COLORS[first_epoch % len(config.EPOCH_COLORS)]
+
+                # Toe marker (first epoch)
+                fig.add_trace(go.Scatter(
+                    x=[cliff_pos_first['toe_distance']],
+                    y=[values[first_epoch, toe_idx]],
+                    mode='markers',
+                    name=f'Toe ({first_label})',
+                    marker=dict(color=color_first, size=10, symbol='triangle-up', line=dict(color='white', width=1)),
+                    showlegend=False,
+                ))
+
+                # Top marker (first epoch)
+                fig.add_trace(go.Scatter(
+                    x=[cliff_pos_first['top_distance']],
+                    y=[values[first_epoch, top_idx]],
+                    mode='markers',
+                    name=f'Top ({first_label})',
+                    marker=dict(color=color_first, size=10, symbol='triangle-down', line=dict(color='white', width=1)),
+                    showlegend=False,
+                ))
+
+        # Last valid epoch cliff markers (if different from first)
+        if len(valid_epochs) >= 2:
+            last_epoch = valid_epochs[-1]
+            cliff_pos_last = get_cliff_positions_by_id(data, transect_id, last_epoch)
+            if cliff_pos_last is not None:
+                toe_idx = cliff_pos_last.get('toe_idx')
+                top_idx = cliff_pos_last.get('top_idx')
+                if toe_idx is not None and top_idx is not None:
+                    last_label = dates[last_epoch][:10] if dates else f"E{last_epoch}"
+                    color_last = config.EPOCH_COLORS[last_epoch % len(config.EPOCH_COLORS)]
+
+                    # Toe marker (last epoch)
+                    fig.add_trace(go.Scatter(
+                        x=[cliff_pos_last['toe_distance']],
+                        y=[values[last_epoch, toe_idx]],
+                        mode='markers',
+                        name=f'Toe ({last_label})',
+                        marker=dict(color=color_last, size=10, symbol='triangle-up', line=dict(color='white', width=1)),
+                        showlegend=False,
+                    ))
+
+                    # Top marker (last epoch)
+                    fig.add_trace(go.Scatter(
+                        x=[cliff_pos_last['top_distance']],
+                        y=[values[last_epoch, top_idx]],
+                        mode='markers',
+                        name=f'Top ({last_label})',
+                        marker=dict(color=color_last, size=10, symbol='triangle-down', line=dict(color='white', width=1)),
+                        showlegend=False,
+                    ))
 
     unit = config.FEATURE_UNITS.get(feature_name, '')
     fig.update_layout(

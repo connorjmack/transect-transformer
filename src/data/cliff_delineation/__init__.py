@@ -27,11 +27,12 @@ Usage:
 
 from .feature_adapter import CliffFeatureAdapter
 from .model_wrapper import CliffDelineationModel
-from .detector import detect_cliff_edges, load_cliff_results
+from .detector import detect_cliff_edges, detect_and_merge, load_cliff_results
 
 __all__ = [
     "CliffFeatureAdapter",
     "CliffDelineationModel",
     "detect_cliff_edges",
+    "detect_and_merge",
     "load_cliff_results",
 ]

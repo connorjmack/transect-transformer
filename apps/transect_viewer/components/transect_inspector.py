@@ -12,6 +12,8 @@ from apps.transect_viewer.utils.data_loader import (
     get_cube_dimensions,
     get_epoch_dates,
     is_cube_format,
+    has_cliff_data,
+    get_cliff_positions_by_id,
 )
 
 
@@ -75,8 +77,13 @@ def render_inspector():
 
     st.markdown("---")
 
+    # Get cliff positions if available
+    cliff_pos = None
+    if has_cliff_data(data):
+        cliff_pos = get_cliff_positions_by_id(data, transect_id, epoch_idx)
+
     # Feature plots
-    _render_feature_plots(transect)
+    _render_feature_plots(transect, cliff_pos)
 
     st.markdown("---")
 
@@ -120,7 +127,7 @@ def _render_metadata_summary(transect: dict, is_cube: bool, epoch_dates: list, e
             st.metric("Transect ID", transect.get('transect_id', 'N/A'))
 
 
-def _render_feature_plots(transect: dict):
+def _render_feature_plots(transect: dict, cliff_pos: dict = None):
     """Render plots for all features."""
     st.subheader("Feature Profiles")
 
@@ -153,6 +160,46 @@ def _render_feature_plots(transect: dict):
         ),
     ))
 
+    # Add cliff toe/top markers if available and showing elevation
+    if cliff_pos is not None and selected_feature == 'elevation_m':
+        toe_dist = cliff_pos['toe_distance']
+        top_dist = cliff_pos['top_distance']
+        toe_idx = cliff_pos.get('toe_idx')
+        top_idx = cliff_pos.get('top_idx')
+
+        # Get elevations at toe/top
+        if toe_idx is not None and top_idx is not None:
+            toe_elev = points[toe_idx, feature_idx]
+            top_elev = points[top_idx, feature_idx]
+
+            # Add toe marker
+            fig.add_trace(go.Scatter(
+                x=[toe_dist],
+                y=[toe_elev],
+                mode='markers+text',
+                name='Cliff Toe',
+                marker=dict(color='#e74c3c', size=12, symbol='triangle-up'),
+                text=['Toe'],
+                textposition='bottom center',
+                textfont=dict(color='#e74c3c', size=10),
+            ))
+
+            # Add top marker
+            fig.add_trace(go.Scatter(
+                x=[top_dist],
+                y=[top_elev],
+                mode='markers+text',
+                name='Cliff Top',
+                marker=dict(color='#27ae60', size=12, symbol='triangle-down'),
+                text=['Top'],
+                textposition='top center',
+                textfont=dict(color='#27ae60', size=10),
+            ))
+
+            # Add vertical lines at toe/top
+            fig.add_vline(x=toe_dist, line_dash="dash", line_color="#e74c3c", opacity=0.5)
+            fig.add_vline(x=top_dist, line_dash="dash", line_color="#27ae60", opacity=0.5)
+
     unit = config.FEATURE_UNITS.get(feature_names[feature_idx], '')
     fig.update_layout(
         title=f"{feature_names[feature_idx]} Profile",
@@ -162,6 +209,17 @@ def _render_feature_plots(transect: dict):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+    # Show cliff info if available
+    if cliff_pos is not None:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Cliff Toe", f"{cliff_pos['toe_distance']:.1f} m")
+        with col2:
+            st.metric("Cliff Top", f"{cliff_pos['top_distance']:.1f} m")
+        with col3:
+            cliff_width = cliff_pos['top_distance'] - cliff_pos['toe_distance']
+            st.metric("Cliff Width", f"{cliff_width:.1f} m")
 
     # All features grid
     with st.expander("Show All Features", expanded=False):

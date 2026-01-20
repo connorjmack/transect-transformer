@@ -212,20 +212,18 @@ def normalize_m3c2(raw: np.ndarray) -> np.ndarray:
 
 ### 2.5 Beach Slices
 
+**Important: Two Transect Spacing Contexts**
+
+| Context | Spacing | Total Transects | Used For |
+|---------|---------|-----------------|----------|
+| **Volume Estimation** | 1m | ~19,600 | M3C2 change detection, event volume calculations |
+| **Model Training** | 10m | ~1,958 | CliffCast transformer input (target spacing) |
+
+The supervised learning labels (event volumes) were computed using 1m transect spacing for accuracy.
+The model itself uses 10m spacing to reduce computation and match MOP monitoring points.
+
 ```python
-# Canonical beach definitions with index ranges
-# These assume 1m transect spacing within each beach
-
-BEACH_SLICES = {
-    'blacks': (0, 4700),        # MOP 520-567, ~4700 transects at 1m
-    'torrey': (4700, 6100),     # MOP 567-581, ~1400 transects
-    'delmar': (6100, 8600),     # MOP 595-620, ~2500 transects
-    'solana': (8600, 11500),    # MOP 637-666, ~2900 transects
-    'sanelijo': (11500, 14000), # MOP 683-708, ~2500 transects
-    'encinitas': (14000, 19600),# MOP 708-764, ~5600 transects
-}
-
-# MOP ID ranges (100m spacing, canonical)
+# Canonical beach definitions - MOP ID ranges (fixed, 100m spacing between MOPs)
 BEACH_MOP_RANGES = {
     'blacks': (520, 567),
     'torrey': (567, 581),
@@ -235,9 +233,30 @@ BEACH_MOP_RANGES = {
     'encinitas': (708, 764),
 }
 
-# NOTE: Actual indices depend on transect spacing used during extraction.
-# For 10m spacing, divide transect counts by 10.
-# Always verify with cube['beach_slices'] from actual file.
+# Beach slices for 10m transect spacing (MODEL TRAINING - target format)
+# Total: ~1,958 transects
+BEACH_SLICES_10M = {
+    'blacks': (0, 479),         # MOP 520-567, 479 transects
+    'torrey': (479, 609),       # MOP 568-581, 130 transects
+    'delmar': (609, 857),       # MOP 595-620, 248 transects
+    'solana': (857, 1145),      # MOP 637-666, 288 transects
+    'sanelijo': (1145, 1408),   # MOP 683-708, 263 transects
+    'encinitas': (1408, 1958),  # MOP 709-764, 550 transects
+}
+
+# Beach slices for 1m transect spacing (VOLUME ESTIMATION only)
+# Total: ~19,600 transects
+BEACH_SLICES_1M = {
+    'blacks': (0, 4700),        # MOP 520-567, ~4700 transects
+    'torrey': (4700, 6100),     # MOP 567-581, ~1400 transects
+    'delmar': (6100, 8600),     # MOP 595-620, ~2500 transects
+    'solana': (8600, 11500),    # MOP 637-666, ~2900 transects
+    'sanelijo': (11500, 14000), # MOP 683-708, ~2500 transects
+    'encinitas': (14000, 19600),# MOP 708-764, ~5600 transects
+}
+
+# IMPORTANT: Always verify with cube['beach_slices'] from actual file.
+# The cube stores the actual indices used during extraction.
 ```
 
 ---
@@ -254,14 +273,16 @@ BEACH_MOP_RANGES = {
 
 ### 3.2 Available Files
 
-| Beach | Filename | Expected Path |
-|-------|----------|---------------|
-| Blacks | `blacks_events_sig.csv` | `data/raw/events/blacks_events_sig.csv` |
-| Torrey | `torrey_events_sig.csv` | `data/raw/events/torrey_events_sig.csv` |
-| Del Mar | `delmar_events_sig.csv` | `data/raw/events/delmar_events_sig.csv` |
-| Solana | `solana_events_sig.csv` | `data/raw/events/solana_events_sig.csv` |
-| San Elijo | `sanelijo_events_sig.csv` | `data/raw/events/sanelijo_events_sig.csv` |
-| Encinitas | `encinitas_events_sig.csv` | `data/raw/events/encinitas_events_sig.csv` |
+| Beach | Filename Options | Status |
+|-------|------------------|--------|
+| Blacks | `blacks_events_sig.csv` or `Blacks_events_sig.csv` | **NOT YET AVAILABLE** - will be added when M3C2 analysis is complete |
+| Torrey | `torrey_events_sig.csv` or `Torrey_events_sig.csv` | Available |
+| Del Mar | `delmar_events_sig.csv` or `DelMar_events_sig.csv` | Available |
+| Solana | `solana_events_sig.csv` or `Solana_events_sig.csv` | Available |
+| San Elijo | `sanelijo_events_sig.csv` or `SanElijo_events_sig.csv` | Available |
+| Encinitas | `encinitas_events_sig.csv` or `Encinitas_events_sig.csv` | Available |
+
+**Note**: The loader supports both lowercase (`delmar_events_sig.csv`) and mixed-case (`DelMar_events_sig.csv`) filenames for flexibility.
 
 ### 3.3 Schema
 
@@ -381,49 +402,82 @@ EVENT_CLASS_NAMES = ['stable', 'minor', 'major', 'failure']
 import pandas as pd
 from pathlib import Path
 
+# Filename patterns to try (supports both lowercase and mixed-case)
+EVENT_FILENAME_PATTERNS = {
+    'blacks': ['blacks_events_sig.csv', 'Blacks_events_sig.csv'],
+    'torrey': ['torrey_events_sig.csv', 'Torrey_events_sig.csv'],
+    'delmar': ['delmar_events_sig.csv', 'DelMar_events_sig.csv'],
+    'solana': ['solana_events_sig.csv', 'Solana_events_sig.csv'],
+    'sanelijo': ['sanelijo_events_sig.csv', 'SanElijo_events_sig.csv'],
+    'encinitas': ['encinitas_events_sig.csv', 'Encinitas_events_sig.csv'],
+}
+
+
 def load_events(beach: str, events_dir: str = 'data/raw/events') -> pd.DataFrame:
     """
     Load event CSV for a specific beach.
-    
+
+    Supports both lowercase and mixed-case filenames (e.g., delmar_events_sig.csv
+    or DelMar_events_sig.csv).
+
     Args:
         beach: Beach name (lowercase): blacks, torrey, delmar, solana, sanelijo, encinitas
         events_dir: Directory containing event CSVs
-    
+
     Returns:
         DataFrame with parsed dates and validated columns
+
+    Raises:
+        FileNotFoundError: If no matching event file found
+        ValueError: If required columns are missing
     """
-    path = Path(events_dir) / f'{beach}_events_sig.csv'
-    
-    if not path.exists():
-        raise FileNotFoundError(f'Event file not found: {path}')
-    
+    events_path = Path(events_dir)
+
+    # Try each filename pattern for this beach
+    patterns = EVENT_FILENAME_PATTERNS.get(beach.lower(), [f'{beach}_events_sig.csv'])
+
+    path = None
+    for pattern in patterns:
+        candidate = events_path / pattern
+        if candidate.exists():
+            path = candidate
+            break
+
+    if path is None:
+        tried = ', '.join(patterns)
+        raise FileNotFoundError(f'Event file not found for {beach}. Tried: {tried}')
+
     df = pd.read_csv(path)
-    
+
     # Parse dates
     df['mid_date'] = pd.to_datetime(df['mid_date'])
     df['start_date'] = pd.to_datetime(df['start_date'])
     df['end_date'] = pd.to_datetime(df['end_date'])
-    
+
     # Validate required columns
     required = ['mid_date', 'start_date', 'end_date', 'volume', 'vol_unc',
                 'elevation', 'alongshore_centroid_m', 'width', 'height']
     missing = set(required) - set(df.columns)
     if missing:
         raise ValueError(f'Missing required columns: {missing}')
-    
+
     # Add event class
     df['event_class'] = df['volume'].apply(volume_to_class)
-    
-    # Add beach identifier
-    df['beach'] = beach
-    
+
+    # Add beach identifier (normalized to lowercase)
+    df['beach'] = beach.lower()
+
     return df
 
 
 def load_all_events(events_dir: str = 'data/raw/events') -> pd.DataFrame:
-    """Load and concatenate events from all beaches."""
+    """
+    Load and concatenate events from all beaches.
+
+    Note: Blacks beach events are not yet available and will be skipped.
+    """
     beaches = ['blacks', 'torrey', 'delmar', 'solana', 'sanelijo', 'encinitas']
-    
+
     dfs = []
     for beach in beaches:
         try:
@@ -431,14 +485,18 @@ def load_all_events(events_dir: str = 'data/raw/events') -> pd.DataFrame:
             dfs.append(df)
             print(f'  {beach}: {len(df)} events')
         except FileNotFoundError:
-            print(f'  {beach}: NOT FOUND')
-    
+            # Blacks events not yet available - this is expected
+            if beach == 'blacks':
+                print(f'  {beach}: NOT YET AVAILABLE (pending M3C2 analysis)')
+            else:
+                print(f'  {beach}: NOT FOUND')
+
     if not dfs:
         raise ValueError('No event files found')
-    
+
     combined = pd.concat(dfs, ignore_index=True)
     print(f'Total: {len(combined)} events')
-    
+
     return combined
 ```
 
@@ -704,7 +762,7 @@ def alongshore_to_transect_idx(
     alongshore_m: float,
     beach: str,
     cube: dict,
-    transect_spacing_m: float = 1.0,
+    transect_spacing_m: float = 10.0,  # 10m for model training
 ) -> int:
     """
     Convert local alongshore coordinate to transect index in cube.

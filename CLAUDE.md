@@ -272,25 +272,33 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
 
 4. **PredictionHeads** (`src/models/prediction_heads.py`): Multi-task prediction outputs
    - All heads operate on pooled representation from fusion module
-   - **RiskIndexHead**: Sigmoid output, range [0,1]
+   - **VolumeHead**: Predicts log(volume+1), softplus activation ensures positive values (m³)
+   - **EventClassHead**: 4 classes (stable, minor, major, failure), softmax over logits
+   - **RiskIndexHead**: Sigmoid output, range [0,1], computed from volume + cliff height
    - **CollapseProbabilityHead**: 4 time horizons (1wk, 1mo, 3mo, 1yr), multi-label binary (sigmoid per horizon)
-   - **ExpectedRetreatHead**: Softplus activation ensures positive values (m/yr)
-   - **FailureModeHead**: 5 classes (stable, topple, planar, rotational, rockfall), returns logits for cross-entropy
    - Heads can be selectively enabled/disabled for phased training
+   - **Event Classification Thresholds**:
+     - Class 0 (stable): volume < 10 m³
+     - Class 1 (minor): 10 ≤ volume < 50 m³
+     - Class 2 (major): 50 ≤ volume < 200 m³
+     - Class 3 (failure): volume ≥ 200 m³
    - **Usage**:
      ```python
-     # Phase 1: Risk only
+     # Phase 1: Volume + Risk only
      heads_phase1 = PredictionHeads(
-         enable_risk=True, enable_retreat=False,
-         enable_collapse=False, enable_failure_mode=False
+         enable_volume=True, enable_event_class=False,
+         enable_risk=True, enable_collapse=False
      )
 
-     # Phase 4: All heads
+     # Full model: All heads
      heads_full = PredictionHeads()  # All enabled by default
 
      outputs = heads_full(pooled_embeddings)
-     # Returns dict with: risk_index, retreat_m, p_collapse, failure_mode_logits
+     # Returns dict with: volume_pred, event_class_logits, risk_index, p_collapse
      ```
+
+   > **Note**: Current implementation has ExpectedRetreatHead and FailureModeHead.
+   > These will be replaced with VolumeHead and EventClassHead per `docs/model_plan.md`.
 
 5. **CliffCast** (`src/models/cliffcast.py`): Full model assembly
    - Instantiates all encoders, fusion module, and prediction heads
@@ -320,11 +328,11 @@ from src.models import CliffCast, SpatioTemporalTransectEncoder, WaveEncoder, At
          atmos_features=atmos_features,  # (B, 90, 24)
      )
 
-     # Outputs dict contains:
+     # Outputs dict contains (target design per docs/model_plan.md):
+     # - volume_pred: (B,) log(volume+1) predictions
+     # - event_class_logits: (B,4) logits for [stable, minor, major, failure]
      # - risk_index: (B,) in [0,1]
-     # - retreat_m: (B,) positive values
      # - p_collapse: (B,4) probabilities per horizon
-     # - failure_mode_logits: (B,5) logits
 
      # Extract attention weights for interpretability
      attn_outputs = model.get_attention_weights(...)
@@ -494,21 +502,34 @@ pytest tests/test_models/ --cov=src/models --cov-report=html
 - Edge cases: Single timestep, large batches, zero inputs, eval mode
 
 ### Loss Function
-`CliffCastLoss` in `src/training/losses.py` combines multiple objectives:
+`CliffCastLoss` in `src/training/losses.py` combines multiple objectives (per `docs/model_plan.md`):
+- Volume: Smooth L1 loss on log(volume+1) (weight=1.0)
+- Event Classification: Cross-entropy with focal loss option for class imbalance (weight=1.0)
 - Risk Index: Smooth L1 loss (weight=1.0)
-- Expected Retreat: Smooth L1 loss (weight=1.0)
 - Collapse Probability: Binary cross-entropy per horizon (weight=2.0, higher for safety-critical)
-- Failure Mode: Cross-entropy, only on samples where failure occurred (weight=0.5, fewer labels)
+
+Features confidence weighting and label source awareness (observed events weighted higher than derived labels).
 
 ### Risk Index Formula
 ```python
-def compute_risk_index(retreat_m_yr: float, cliff_height_m: float) -> float:
-    height_factor = 1 + 0.1 * (cliff_height_m - 20) / 20
-    weighted_retreat = retreat_m_yr * max(height_factor, 0.5)
-    risk = 1 / (1 + np.exp(-2 * (weighted_retreat - 1)))
+def compute_risk_index(total_volume: float, cliff_height: float) -> float:
+    """Compute risk index from event volume and cliff height."""
+    # Log-transform volume (handles wide range)
+    log_vol = np.log1p(total_volume)  # log(1 + vol)
+
+    # Height factor: taller cliffs have higher consequence
+    height_factor = 1 + 0.05 * (cliff_height - 15)  # Centered at 15m
+    height_factor = np.clip(height_factor, 0.5, 2.0)
+
+    # Combined score
+    score = log_vol * height_factor
+
+    # Sigmoid normalization
+    # Calibrated: vol=10m³ → ~0.3, vol=50m³ → ~0.5, vol=200m³ → ~0.75
+    risk = 1 / (1 + np.exp(-0.5 * (score - 4)))
     return float(np.clip(risk, 0, 1))
 ```
-Sigmoid-normalized, centered at 1 m/yr retreat. Taller cliffs amplify risk.
+Sigmoid-normalized, based on event volume. Taller cliffs amplify risk.
 
 ### Study Site: San Diego County Beaches
 
@@ -681,7 +702,7 @@ Log to Weights & Biases:
 3. **Cube vs. Flat format**: Model expects (B, T, N, 12) cube format, not flat (B*T, N, 12)
 4. **Concatenation order**: Environmental embeddings are [wave, precip] not [precip, wave]
 5. **CLS token**: Prepended to sequence, so output has shape (B, T+1, d_model) after temporal attention
-6. **Failure mode loss**: Only computed on samples with `failure_mode > 0` (not stable)
+6. **Event class loss**: Use focal loss option to handle class imbalance (most samples are stable)
 7. **Attention pooling**: Use learned attention weights, not simple mean pooling
 8. **Temporal alignment**: Environmental data aligned to most recent scan; model sees full history
 9. **Batch_first=True**: All transformers use `batch_first=True` convention
@@ -695,16 +716,18 @@ Log to Weights & Biases:
 ## Success Metrics
 
 ### Minimum Viable Product
-- Risk index R² > 0.30
-- Collapse probability (1yr) AUC-ROC > 0.70
-- Expected retreat MAE < 1.0 m/yr
+- Event Detection AUC > 0.70 (binary: any event vs stable)
+- Volume Log-MAE < 1.0 (in log(m³ + 1) space)
+- Risk Index Correlation > 0.50 (Pearson r)
+- Event Class F1 (macro) > 0.40 (across all 4 classes)
 - Inference throughput > 10,000 transects/hour
 
 ### Target Performance
-- Risk index R² > 0.50
-- Collapse probability AUC-ROC > 0.85 (all horizons)
-- Expected retreat MAE < 0.5 m/yr
-- Failure mode accuracy > 70%
+- Event Detection AUC > 0.85
+- Volume Log-MAE < 0.5
+- Risk Index Correlation > 0.70
+- Event Class F1 (macro) > 0.55
+- Failure Class F1 > 0.50 (most important class)
 - Well-calibrated probabilities (ECE < 0.1)
 
 ## Notes

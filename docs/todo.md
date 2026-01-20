@@ -1,5 +1,16 @@
 # CliffCast Todo List
 
+## High Priority - Consider Soon
+
+- [ ] **Cube Format v2**: Update unified cube to include:
+  - `coverage_mask` (n_transects, n_epochs) boolean for valid data
+  - `beach_slices` dict mapping beach name to (start_idx, end_idx)
+  - `mop_ids` array with integer MOP IDs
+  - 13th feature: `m3c2_distance` (change to previous epoch)
+  - See `docs/DATA_REQUIREMENTS.md` Section 2 for full spec
+
+---
+
 # Decisions to make
 - should we limit the transect to be only between the cliff toe and cliff top? Can use cliffdelinea2.0 for this. 
 - include beach or no? (beach erosion could be one of the failure classes)
@@ -34,13 +45,14 @@
   - Attention weight extraction for interpretability
   - Padding mask support
   - 25 tests passing
-- [x] PredictionHeads (all four heads implemented)
+- [x] PredictionHeads (initial four heads implemented)
   - RiskIndexHead: Sigmoid output [0,1]
   - ExpectedRetreatHead: Softplus for positive values
   - CollapseProbabilityHead: Multi-label 4 horizons
   - FailureModeHead: Multi-class 5 modes
   - Selective enabling for phased training
   - 35 tests passing
+  - **TODO**: Update to new heads per model_plan.md (VolumeHead, EventClassHead)
 - [x] CliffCast main model
   - Full end-to-end model assembly
   - Flexible configuration
@@ -96,10 +108,11 @@
   - Handle temporal alignment
   - Batch collation with padding
 - [ ] Loss functions (CliffCastLoss)
+  - Volume: Smooth L1 loss on log(vol+1) (weight=1.0)
+  - Event Classification: Cross-entropy with focal loss option (weight=1.0)
   - Risk Index: Smooth L1 loss (weight=1.0)
-  - Expected Retreat: Smooth L1 loss (weight=1.0)
   - Collapse Probability: Binary cross-entropy (weight=2.0)
-  - Failure Mode: Cross-entropy (weight=0.5, only on failures)
+  - Confidence weighting (observed events weighted higher)
   - Combined weighted loss
 - [ ] Training loop with W&B logging
   - Optimizer (AdamW) + scheduler (cosine)
@@ -114,10 +127,11 @@
 
 ### Phase 4: Evaluation & Metrics
 - [ ] Evaluation metrics
-  - Risk Index: R², MAE, RMSE
+  - Volume: MAE, RMSE, Log-MAE, correlation
+  - Event Classification: Accuracy, per-class F1, confusion matrix, detection AUC
+  - Risk Index: MAE, RMSE, correlation
   - Collapse Probability: AUC-ROC, precision-recall, calibration (ECE)
-  - Expected Retreat: MAE, RMSE
-  - Failure Mode: Accuracy, confusion matrix, per-class F1
+  - Stratified metrics: observed vs derived labels
 - [ ] Baseline comparisons
   - Linear regression baseline
   - Random forest baseline

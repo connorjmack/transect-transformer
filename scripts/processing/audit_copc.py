@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit a COPC file to verify it's usable for transect extraction.
+"""Audit COPC files to verify they're usable for transect extraction.
 
 Tests:
 1. File exists and is readable
@@ -8,24 +8,195 @@ Tests:
 4. Has required attributes for transect extraction
 5. Reports file statistics
 
+Integrity checks (--check-integrity):
+- Validates LAS magic bytes ("LASF")
+- Compares header point count vs actual readable points
+- Checks file size is reasonable (>1MB)
+- Detects partially written / corrupted files
+
 Usage:
+    # Audit single file
     python scripts/processing/audit_copc.py /path/to/file.copc.laz
 
     # With custom spatial query test bounds
     python scripts/processing/audit_copc.py /path/to/file.copc.laz --test-bounds 476000 3631000 477000 3632000
+
+    # Batch integrity check all COPC files from master_list.csv
+    python scripts/processing/audit_copc.py --survey-csv data/raw/master_list.csv --check-integrity
+
+    # Just list corrupt files (quiet mode)
+    python scripts/processing/audit_copc.py --survey-csv data/raw/master_list.csv --check-integrity --quiet
 """
 
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 import time
 
 import numpy as np
 
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except ImportError:
+    HAS_PANDAS = False
+    pd = None
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+    tqdm = None
+
+# Add project root for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+try:
+    from scripts.processing.extract_transects import convert_path_for_os, get_current_os
+    HAS_PATH_CONVERTER = True
+except ImportError:
+    HAS_PATH_CONVERTER = False
+
 # Required attributes for transect extraction (from CLAUDE.md)
 REQUIRED_ATTRIBUTES = ['x', 'y', 'z', 'intensity']
 OPTIONAL_ATTRIBUTES = ['red', 'green', 'blue', 'classification', 'return_number', 'number_of_returns']
+
+# Minimum file size for valid COPC (1MB) - partial writes are usually much smaller
+MIN_VALID_SIZE_BYTES = 1 * 1024 * 1024
+
+# LAS file magic bytes
+LAS_MAGIC = b'LASF'
+
+
+def get_copc_path(las_path: Path) -> Path:
+    """Get the COPC output path for a LAS file (mirrors make_copc.py)."""
+    stem = las_path.stem
+    if stem.endswith('.copc'):
+        return las_path
+    return las_path.with_name(stem + '.copc.laz')
+
+
+def check_magic_bytes(path: Path) -> Tuple[bool, str]:
+    """Check if file has valid LAS magic bytes ('LASF')."""
+    try:
+        with open(path, 'rb') as f:
+            magic = f.read(4)
+        if magic == LAS_MAGIC:
+            return True, "Valid LAS magic bytes (LASF)"
+        else:
+            return False, f"Invalid magic bytes: {magic!r} (expected b'LASF')"
+    except Exception as e:
+        return False, f"Could not read magic bytes: {e}"
+
+
+def check_file_size(path: Path, min_size: int = MIN_VALID_SIZE_BYTES) -> Tuple[bool, str]:
+    """Check if file size is above minimum threshold."""
+    try:
+        size = path.stat().st_size
+        size_mb = size / (1024 * 1024)
+        if size >= min_size:
+            return True, f"File size OK ({size_mb:.2f} MB)"
+        else:
+            return False, f"File too small ({size_mb:.2f} MB < {min_size / (1024*1024):.1f} MB minimum)"
+    except Exception as e:
+        return False, f"Could not check file size: {e}"
+
+
+def check_point_count_integrity(path: Path) -> Tuple[bool, str, Dict[str, Any]]:
+    """Check if header point count matches actual readable points.
+
+    This detects truncated files where the header was written but point data is incomplete.
+    """
+    info = {}
+    try:
+        import laspy
+    except ImportError:
+        return False, "laspy not installed", info
+
+    try:
+        with laspy.open(str(path)) as f:
+            header_count = f.header.point_count
+            info['header_point_count'] = header_count
+
+            # For very large files, we can't count all points efficiently
+            # Instead, try to read a chunk from the end of the file
+            if header_count > 10_000_000:
+                # For large files, just verify we can read points from various offsets
+                try:
+                    # Read first chunk
+                    chunk_size = min(100_000, header_count)
+                    points = f.read_points(chunk_size)
+                    if len(points) != chunk_size:
+                        return False, f"Could not read expected points from start (got {len(points)}, expected {chunk_size})", info
+
+                    # Seek to near end and read
+                    if header_count > chunk_size * 2:
+                        # Note: laspy doesn't support seeking, so for large files we do a sampling approach
+                        info['validation_method'] = 'start_chunk_only'
+                        return True, f"Large file ({header_count:,} pts) - verified start chunk readable", info
+
+                except Exception as e:
+                    return False, f"Failed to read points: {e}", info
+            else:
+                # For smaller files, count all points
+                actual_count = 0
+                for points in f.chunk_iterator(1_000_000):
+                    actual_count += len(points)
+
+                info['actual_point_count'] = actual_count
+                info['validation_method'] = 'full_count'
+
+                if actual_count == header_count:
+                    return True, f"Point count matches header ({actual_count:,} points)", info
+                else:
+                    diff = header_count - actual_count
+                    pct = (diff / header_count) * 100 if header_count > 0 else 0
+                    return False, f"Point count mismatch: header={header_count:,}, actual={actual_count:,} (missing {diff:,}, {pct:.1f}%)", info
+
+    except Exception as e:
+        return False, f"Error checking point count: {e}", info
+
+
+def run_integrity_check(path: Path, verbose: bool = True) -> Tuple[bool, List[str]]:
+    """Run quick integrity checks on a COPC file.
+
+    Returns:
+        Tuple of (passed: bool, issues: List[str])
+    """
+    issues = []
+
+    # Check 1: File exists
+    if not path.exists():
+        return False, ["File not found"]
+
+    # Check 2: File size
+    ok, msg = check_file_size(path)
+    if not ok:
+        issues.append(f"SIZE: {msg}")
+
+    # Check 3: Magic bytes
+    ok, msg = check_magic_bytes(path)
+    if not ok:
+        issues.append(f"MAGIC: {msg}")
+        # If magic bytes are wrong, file is definitely corrupt
+        return False, issues
+
+    # Check 4: COPC VLR
+    ok, msg, _ = check_copc_vlr(path)
+    if not ok:
+        issues.append(f"VLR: {msg}")
+
+    # Check 5: Point count integrity (skip if VLR already failed)
+    if not issues or verbose:
+        ok, msg, _ = check_point_count_integrity(path)
+        if not ok:
+            issues.append(f"POINTS: {msg}")
+
+    passed = len(issues) == 0
+    return passed, issues
 
 
 def check_file_exists(path: Path) -> Tuple[bool, str]:
@@ -409,17 +580,84 @@ def run_full_audit(path: Path, test_bounds: Optional[Tuple[float, float, float, 
     return all_passed
 
 
+def run_batch_integrity_check(copc_paths: List[Path], quiet: bool = False) -> Tuple[int, int, List[Tuple[Path, List[str]]]]:
+    """Run integrity checks on multiple COPC files.
+
+    Args:
+        copc_paths: List of COPC file paths to check
+        quiet: If True, suppress progress output
+
+    Returns:
+        Tuple of (passed_count, failed_count, failed_files_with_issues)
+    """
+    passed = 0
+    failed = 0
+    failed_files: List[Tuple[Path, List[str]]] = []
+
+    if HAS_TQDM and not quiet:
+        iterator = tqdm(copc_paths, desc="Checking integrity", unit="file")
+    else:
+        iterator = copc_paths
+
+    for copc_path in iterator:
+        ok, issues = run_integrity_check(copc_path, verbose=False)
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+            failed_files.append((copc_path, issues))
+            if not quiet and not HAS_TQDM:
+                print(f"  CORRUPT: {copc_path.name}")
+
+    return passed, failed, failed_files
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Audit a COPC file for transect extraction compatibility',
+        description='Audit COPC files for transect extraction compatibility',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
 
+    # Input sources
     parser.add_argument(
         'copc_file',
         type=Path,
-        help='Path to COPC file to audit'
+        nargs='?',
+        help='Path to COPC file to audit (for single-file mode)'
+    )
+
+    parser.add_argument(
+        '--survey-csv',
+        type=Path,
+        help='Path to master_list.csv - checks COPC versions of all LAS files listed'
+    )
+
+    parser.add_argument(
+        '--path-col',
+        type=str,
+        default='full_path',
+        help='Column name for LAS paths in CSV (default: full_path)'
+    )
+
+    parser.add_argument(
+        '--target-os',
+        type=str,
+        choices=['mac', 'linux'],
+        default=None,
+        help='Target OS for path conversion (default: auto-detect)'
+    )
+
+    parser.add_argument(
+        '--check-integrity',
+        action='store_true',
+        help='Run quick integrity checks only (magic bytes, size, VLR, point count)'
+    )
+
+    parser.add_argument(
+        '--quiet', '-q',
+        action='store_true',
+        help='Quiet mode - only output corrupt file paths (useful for piping)'
     )
 
     parser.add_argument(
@@ -427,15 +665,141 @@ def main():
         type=float,
         nargs=4,
         metavar=('X_MIN', 'Y_MIN', 'X_MAX', 'Y_MAX'),
-        help='Custom bounds for spatial query test'
+        help='Custom bounds for spatial query test (single-file mode only)'
+    )
+
+    parser.add_argument(
+        '--output',
+        type=Path,
+        help='Write list of corrupt files to this path (one per line)'
     )
 
     args = parser.parse_args()
 
-    bounds = tuple(args.test_bounds) if args.test_bounds else None
+    # Validate arguments
+    if not args.copc_file and not args.survey_csv:
+        parser.error("Either copc_file or --survey-csv is required")
 
-    success = run_full_audit(args.copc_file, bounds)
-    return 0 if success else 1
+    # Single file mode
+    if args.copc_file and not args.survey_csv:
+        if args.check_integrity:
+            # Quick integrity check only
+            ok, issues = run_integrity_check(args.copc_file, verbose=True)
+            if ok:
+                if not args.quiet:
+                    print(f"PASS: {args.copc_file}")
+                return 0
+            else:
+                if args.quiet:
+                    print(str(args.copc_file))
+                else:
+                    print(f"FAIL: {args.copc_file}")
+                    for issue in issues:
+                        print(f"  - {issue}")
+                return 1
+        else:
+            # Full audit
+            bounds = tuple(args.test_bounds) if args.test_bounds else None
+            success = run_full_audit(args.copc_file, bounds)
+            return 0 if success else 1
+
+    # Batch mode with --survey-csv
+    if args.survey_csv:
+        if not HAS_PANDAS:
+            print("Error: pandas required for CSV mode. Install with: pip install pandas")
+            return 1
+
+        if not args.survey_csv.exists():
+            print(f"Error: CSV file not found: {args.survey_csv}")
+            return 1
+
+        df = pd.read_csv(args.survey_csv)
+        if not args.quiet:
+            print(f"Loaded {len(df)} rows from {args.survey_csv}")
+
+        if args.path_col not in df.columns:
+            print(f"Error: Column '{args.path_col}' not found. Available: {df.columns.tolist()}")
+            return 1
+
+        # Get unique LAS paths and convert for current OS
+        if HAS_PATH_CONVERTER:
+            target_os = args.target_os or get_current_os()
+        else:
+            target_os = 'mac'  # fallback
+            if not args.quiet:
+                print("Warning: Path converter not available, assuming mac paths")
+
+        raw_paths = df[args.path_col].unique().tolist()
+
+        # Build list of COPC paths to check
+        copc_paths: List[Path] = []
+        missing_copc = 0
+
+        for p in raw_paths:
+            if HAS_PATH_CONVERTER:
+                converted = convert_path_for_os(p, target_os=target_os)
+            else:
+                converted = p
+            las_path = Path(converted)
+
+            # Skip files that are already COPC
+            if '.copc.' in las_path.name.lower():
+                copc_paths.append(las_path)
+                continue
+
+            copc_path = get_copc_path(las_path)
+            if copc_path.exists():
+                copc_paths.append(copc_path)
+            else:
+                missing_copc += 1
+
+        if not args.quiet:
+            print(f"Found {len(copc_paths)} COPC files to check")
+            if missing_copc > 0:
+                print(f"  ({missing_copc} LAS files have no COPC version yet)")
+
+        if not copc_paths:
+            print("No COPC files to check!")
+            return 0
+
+        # Run integrity checks
+        if not args.quiet:
+            print(f"\n{'='*60}")
+            print("BATCH INTEGRITY CHECK")
+            print(f"{'='*60}\n")
+
+        passed, failed, failed_files = run_batch_integrity_check(copc_paths, quiet=args.quiet)
+
+        # Output results
+        if args.quiet:
+            # Just output corrupt file paths
+            for path, _ in failed_files:
+                print(str(path))
+        else:
+            print(f"\n{'='*60}")
+            print("INTEGRITY CHECK RESULTS")
+            print(f"{'='*60}")
+            print(f"  Passed: {passed}")
+            print(f"  Failed: {failed}")
+
+            if failed_files:
+                print(f"\nCorrupt/incomplete files ({len(failed_files)}):")
+                for path, issues in failed_files:
+                    print(f"\n  {path.name}")
+                    for issue in issues:
+                        print(f"    - {issue}")
+
+        # Write output file if requested
+        if args.output and failed_files:
+            with open(args.output, 'w') as f:
+                for path, issues in failed_files:
+                    f.write(f"{path}\n")
+            if not args.quiet:
+                print(f"\nWrote {len(failed_files)} corrupt file paths to: {args.output}")
+
+        return 1 if failed > 0 else 0
+
+    return 0
 
 
 if __name__ == '__main__':

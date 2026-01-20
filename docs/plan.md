@@ -3,7 +3,7 @@
 > **Target Architecture**: See `docs/model_plan.md` for the full technical specification.
 > **Data Contracts**: See `docs/DATA_REQUIREMENTS.md` for schemas and validation rules.
 
-This document is an actionable checklist to reach the event-supervised CliffCast model described in `model_plan.md`.
+This document is an actionable checklist to reach the susceptibility-based CliffCast classifier described in `model_plan.md`.
 
 ---
 
@@ -11,9 +11,8 @@ This document is an actionable checklist to reach the event-supervised CliffCast
 
 | Resource | Purpose |
 |----------|---------|
-| `docs/model_plan.md` | Target architecture, model design, training pipeline |
+| `docs/model_plan.md` | Target architecture: 5-class susceptibility classification |
 | `docs/DATA_REQUIREMENTS.md` | Data schemas, validation rules, file formats |
-| `docs/todo.md` | Current sprint tasks and recent completions |
 | `CLAUDE.md` | Codebase overview, commands, conventions |
 
 ---
@@ -47,243 +46,210 @@ Core infrastructure that's already built.
 
 ---
 
-## Phase 1: Cube Format v2
+## Phase 1: Labeling Infrastructure (CURRENT PRIORITY)
 
-Update the transect cube to support event-supervised training.
+Build the system to efficiently label transect-epoch pairs with erosion mode classes.
 
-### 1.1 Add M3C2 Distance Feature
-- [ ] **Update `ShapefileTransectExtractor` to output 13 features**
-  - Add `m3c2_distance` as feature index 12
-  - First epoch: set to 0.0 (no previous surface)
-  - Subsequent epochs: compute change from previous epoch's surface
-  - File: `src/data/shapefile_transect_extractor.py`
+### 1.1 Labeling Interface
+- [ ] **Create `apps/labeling/` Streamlit app**
+  - Side-by-side epoch comparison view
+  - Show M3C2 change colored on profile
+  - Keyboard shortcuts: S=stable, B=beach, T=toe, R=rockfall, F=failure
+  - Progress tracking and session management
 
-- [ ] **Update feature normalization**
-  - Clip M3C2 to [-5, 2] meters, normalize to [-1, 1]
-  - Handle NaN values (set to 0.0)
-  - Add to `normalize_m3c2()` function per `DATA_REQUIREMENTS.md` Section 2.3
+- [ ] **Pre-filter candidates using M3C2 thresholds**
+  - Identify pairs with significant change (|mean M3C2| > 0.5m or max erosion > 1m)
+  - Prioritize large events for manual review
+  - Auto-label clearly stable pairs (minimal change)
 
-### 1.2 Add Cube Metadata
-- [ ] **Add `coverage_mask` array**
-  - Shape: `(n_transects, n_epochs)`, dtype: bool
-  - True where valid data exists, False for missing transect-epoch pairs
-  - Enables partial-coverage surveys in unified cube
+### 1.2 Labeling Guidelines
+- [ ] **Create `docs/labeling_guidelines.md`**
+  - Visual examples of each class
+  - Decision tree for ambiguous cases
+  - Dominance hierarchy: Large failure > Small rockfall > Toe erosion > Beach erosion > Stable
 
-- [ ] **Add `beach_slices` dict**
-  - Maps beach name to `(start_idx, end_idx)` tuple
-  - Use canonical 10m spacing indices from `DATA_REQUIREMENTS.md` Section 2.5
+### 1.3 Label Storage
+- [ ] **Create label CSV schema**
+  - Columns: transect_idx, epoch_before, epoch_after, erosion_class, confidence, labeler, notes
+  - Store in `data/labels/erosion_mode_labels.csv`
 
-- [ ] **Add `mop_ids` array**
-  - Shape: `(n_transects,)`, dtype: int32
-  - Extract integer MOP ID from transect string (e.g., "MOP 595" → 595)
+### 1.4 Quality Control
+- [ ] **Double-label 10% of samples**
+  - Track inter-rater agreement
+  - Resolve disagreements to refine class definitions
 
-### 1.3 Update Tests
-- [ ] **Update `tests/test_data/test_transect_extractor.py`**
-  - Test 13 features instead of 12
-  - Test coverage_mask, beach_slices, mop_ids presence
-  - Test M3C2 distance normalization
+---
 
-### 1.4 Regenerate Cube
-- [ ] **Extract unified cube with new format**
-  ```bash
-  python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --output data/processed/unified_cube.npz --unified --prefer-laz --workers 8
+## Phase 2: Data Pipeline
+
+Create training-ready dataset with proper water year splits.
+
+### 2.1 Sample Generation
+- [ ] **Create `src/data/susceptibility_dataset.py`**
+  - Load transect cube and labels
+  - Build samples: context epochs + M3C2 + environment + label
+  - Handle variable context lengths with masking
+
+- [ ] **Create `scripts/processing/prepare_susceptibility_data.py`**
+  - Input: unified_cube.npz, erosion_mode_labels.csv, cdip/, atmospheric/
+  - Output: susceptibility_train.npz, susceptibility_val.npz, susceptibility_test.npz
+
+### 2.2 Water Year Splits
+- [ ] **Implement water year splitting logic**
+  - Train: WY2017-WY2023 (Oct 2016 - Sep 2023)
+  - Validation: WY2024 (Oct 2023 - Sep 2024)
+  - Test: WY2025 (Oct 2024 - Sep 2025)
+  - Water year N runs from Oct 1 of year N-1 to Sep 30 of year N
+
+- [ ] **Handle survey date → water year mapping**
+  - Survey from July 2023 → WY2023 (training)
+  - Survey from Nov 2023 → WY2024 (validation)
+
+### 2.3 Environmental Alignment
+- [ ] **Load wave features for each sample**
+  - 90 days before current epoch, 6hr intervals (360 timesteps)
+  - Match MOP ID to CDIP station
+
+- [ ] **Load atmospheric features for each sample**
+  - 90 days before current epoch, daily (90 timesteps)
+  - From pre-computed parquet files
+
+### 2.4 Validation
+- [ ] **Create `scripts/processing/validate_susceptibility_data.py`**
+  - Verify label distribution per split
+  - Check for data leakage (same transect in train and test at same epoch)
+  - Report class balance statistics
+
+---
+
+## Phase 3: Model Updates
+
+Update architecture for 5-class susceptibility classification.
+
+### 3.1 Classification Head
+- [ ] **Create `src/models/susceptibility_head.py`**
+  - Input: pooled embedding (B, d_model)
+  - Output: 5-class logits (B, 5)
+  - Classes: stable, beach_erosion, toe_erosion, small_rockfall, large_failure
+
+- [ ] **Implement risk score derivation**
+  ```python
+  risk_weights = [0.0, 0.1, 0.4, 0.6, 1.0]
+  risk_score = (probs * risk_weights).sum(dim=-1)
   ```
-- [ ] **Validate with transect viewer**
+
+### 3.2 Update CliffCast
+- [ ] **Update `src/models/cliffcast.py`**
+  - Replace prediction heads with SusceptibilityHead
+  - Output: logits, probs, risk_score, predicted_class
+  - Add `return_attention` option for interpretability
+
+### 3.3 Uncertainty Quantification
+- [ ] **Add MC Dropout for epistemic uncertainty**
+  - Keep dropout active during inference
+  - Run N forward passes, compute mean and std of predictions
+
+### 3.4 Tests
+- [ ] **Update model tests**
+  - Test 5-class output shape
+  - Test risk score derivation
+  - Test attention extraction
 
 ---
 
-## Phase 2: Event Alignment Pipeline
+## Phase 4: Training Infrastructure
 
-Connect M3C2-derived event CSVs to the transect cube.
+Build training loop with asymmetric loss weighting.
 
-### 2.1 Event Loading
-- [ ] **Create `src/data/event_loader.py`**
-  - Implement `load_events(beach, events_dir)` per `DATA_REQUIREMENTS.md` Section 3.5
-  - Support both lowercase and CamelCase filenames
-  - Parse dates, validate required columns
-  - Add `event_class` based on volume thresholds
+### 4.1 Loss Function
+- [ ] **Create `src/training/susceptibility_loss.py`**
+  - Weighted cross-entropy with class weights: [0.3, 1.0, 2.0, 2.0, 5.0]
+  - Label smoothing (0.1) for uncertainty
+  - Asymmetric treatment: low weight for stable (weak negative evidence)
 
-- [ ] **Create `load_all_events(events_dir)` function**
-  - Load and concatenate all beach event CSVs
-  - Skip missing beaches gracefully (blacks not yet available)
-  - Return combined DataFrame with beach column
-
-### 2.2 Event-to-Cube Alignment
-- [ ] **Create `scripts/processing/align_events.py`**
-  - Map `alongshore_centroid_m` → `transect_idx` using coordinate conversion
-  - Find bracketing epochs (epoch_before, epoch_after) for each event
-  - Aggregate multiple events per (transect, epoch_pair)
-  - Output: `data/processed/aligned_events.parquet`
-  - See `model_plan.md` Section "Event Integration Pipeline" for algorithm
-
-- [ ] **Implement aggregation logic**
-  - Sum volumes, propagate uncertainties (sqrt of sum of squares)
-  - Track event counts, max height/width
-  - Compute event_class from total_volume
-
-### 2.3 Tests
-- [ ] **Create `tests/test_data/test_event_loader.py`**
-  - Test case-insensitive filename loading
-  - Test date parsing and validation
-  - Test event classification thresholds
-  - Test alignment to cube coordinates
-
----
-
-## Phase 3: Training Data Generation
-
-Create the final training tensors with aligned features and labels.
-
-### 3.1 Sample Generation
-- [ ] **Create `scripts/processing/prepare_training_data.py`**
-  - Input: unified_cube.npz, aligned_events.parquet, cdip/, atmospheric/
-  - Output: training_data.npz per `DATA_REQUIREMENTS.md` Section 7
-
-- [ ] **Implement sliding window sample generation**
-  - For each transect with ≥4 valid epochs
-  - Context = 3-10 epochs, target = next epoch
-  - Model never sees target epoch in input (true prediction)
-
-- [ ] **Implement hybrid labeling**
-  - Priority 1: Observed events from CSVs (confidence=1.0)
-  - Priority 2: Derived from M3C2 distances (confidence=0.5)
-  - Track `label_source` (0=derived, 1=observed)
-
-- [ ] **Load and align environmental features**
-  - Wave: 90 days before target epoch, 6hr intervals (360 timesteps)
-  - Atmos: 90 days before target epoch, daily (90 timesteps)
-  - Compute day-of-year arrays for seasonality encoding
-
-### 3.2 Compute Labels
-- [ ] **Compute risk index from volume + cliff height**
-  - Use `compute_risk_index()` formula from `model_plan.md`
-  - Log-transform volume, height factor, sigmoid normalization
-
-- [ ] **Assign event classes**
-  - Class 0 (stable): volume < 10 m³
-  - Class 1 (minor): 10 ≤ volume < 50 m³
-  - Class 2 (major): 50 ≤ volume < 200 m³
-  - Class 3 (failure): volume ≥ 200 m³
-
-### 3.3 Data Splits
-- [ ] **Create `scripts/processing/create_splits.py`**
-  - Temporal split (default): last 15% = test, prior 15% = val
-  - Spatial split option: leave one beach out
-  - Output: train_indices.npy, val_indices.npy, test_indices.npy
-
-### 3.4 Validation
-- [ ] **Create `scripts/processing/validate_all.py`**
-  - Verify cube structure and value ranges
-  - Check event alignment coverage
-  - Validate training data shapes and label distributions
-  - Report observed vs derived label percentages
-
----
-
-## Phase 4: Model Updates
-
-Update model architecture to match `model_plan.md`.
-
-### 4.1 Update Transect Encoder
-- [ ] **Update `src/models/transect_encoder.py`**
-  - Change default `n_point_features` from 12 to 13
-  - Update docstrings to reference M3C2 distance feature
-
-### 4.2 Replace Prediction Heads
-- [ ] **Create `VolumeHead` in `src/models/prediction_heads.py`**
-  - Input: pooled embedding (B, d_model)
-  - Output: log(volume+1) prediction (B,)
-  - Activation: Softplus to ensure positive values
-
-- [ ] **Create `EventClassHead` in `src/models/prediction_heads.py`**
-  - Input: pooled embedding (B, d_model)
-  - Output: logits for 4 classes (B, 4)
-  - Classes: stable, minor, major, failure
-
-- [ ] **Update `PredictionHeads` class**
-  - Replace `ExpectedRetreatHead` with `VolumeHead`
-  - Replace `FailureModeHead` with `EventClassHead`
-  - Update enable flags: `enable_volume`, `enable_event_class`
-
-- [ ] **Update `CliffCast` forward pass**
-  - Change output keys: `volume_pred`, `event_class_logits`
-  - Update docstrings and type hints
-
-### 4.3 Update Tests
-- [ ] **Update `tests/test_models/test_prediction_heads.py`**
-  - Test VolumeHead output shape and range
-  - Test EventClassHead output shape
-  - Test selective head enabling
-
-- [ ] **Update `tests/test_models/test_cliffcast.py`**
-  - Test with 13 input features
-  - Test new output keys
-
----
-
-## Phase 5: Training Infrastructure
-
-Build the training loop with confidence weighting.
-
-### 5.1 Dataset Class
-- [ ] **Create `src/data/cliffcast_dataset.py`**
-  - Load training_data.npz
-  - Implement `__getitem__` returning dict of tensors
-  - Pad context to max_context_epochs
-  - Handle context_mask for variable-length sequences
-
-### 5.2 Loss Function
-- [ ] **Create `src/training/losses.py`**
-  - Implement `CliffCastLoss` per `model_plan.md` Section "Loss Functions"
-  - Volume: Smooth L1 on log(vol+1)
-  - Event class: Cross-entropy (with optional focal loss)
-  - Risk index: Smooth L1
-  - Collapse probability: Binary cross-entropy per horizon
-  - Confidence weighting: weight samples by confidence score
-  - Observed boost: multiply observed sample weights by 1.5x
-
-### 5.3 Training Script
-- [ ] **Create `train.py`**
+### 4.2 Training Script
+- [ ] **Create `scripts/train_susceptibility.py`**
   - Load config from YAML
   - Initialize model, optimizer (AdamW), scheduler (cosine)
   - Training loop with gradient clipping (max_norm=1.0)
-  - Validation after each epoch
-  - W&B logging: losses, metrics, sample predictions
-  - Checkpointing: save top-k by validation loss
-  - Early stopping: patience=10 epochs
+  - W&B logging: losses, per-class metrics, confusion matrix
+  - Checkpointing: save top-k by validation macro F1
+  - Early stopping: patience=15 epochs
 
-### 5.4 Config Files
-- [ ] **Create `configs/cliffcast_v2.yaml`**
-  - Model hyperparameters per `model_plan.md` Appendix
+### 4.3 Data Augmentation
+- [ ] **Implement geometric augmentation**
+  - Small noise to elevation (±0.1m)
+  - Small noise to slope (±1°)
+
+- [ ] **Implement temporal augmentation**
+  - Randomly drop one context epoch
+  - Train robustness to missing data
+
+### 4.4 Config Files
+- [ ] **Create `configs/susceptibility_v1.yaml`**
+  - Model hyperparameters per `model_plan.md`
   - Training settings: batch_size=32, lr=1e-4, epochs=100
-  - Loss weights: volume=1.0, class=1.0, risk=0.5, collapse=2.0
+  - Water year split configuration
 
 ---
 
-## Phase 6: Evaluation & Analysis
+## Phase 5: Evaluation
 
-Comprehensive evaluation with stratified metrics.
+Comprehensive evaluation with susceptibility-focused metrics.
 
-### 6.1 Metrics Implementation
+### 5.1 Classification Metrics
 - [ ] **Create `src/training/metrics.py`**
-  - `volume_metrics()`: MAE, RMSE, Log-MAE, correlation
-  - `classification_metrics()`: accuracy, per-class F1, macro F1, detection AUC
-  - `risk_metrics()`: MAE, RMSE, correlation
-  - `stratified_metrics()`: separate metrics for observed vs derived labels
+  - Overall accuracy
+  - Per-class precision, recall, F1
+  - Macro F1 (balanced across classes)
+  - Confusion matrix
 
-### 6.2 Evaluation Script
-- [ ] **Create `evaluate.py`**
+### 5.2 Susceptibility Ranking Metrics
+- [ ] **Implement ranking evaluation**
+  - ROC-AUC for binary (any event vs stable)
+  - ROC-AUC for "dangerous" (classes 3-4 vs classes 0-2)
+  - Precision@K: of top K highest-risk transects, how many experienced events?
+
+### 5.3 Calibration
+- [ ] **Implement calibration metrics**
+  - Expected Calibration Error (ECE)
+  - Reliability diagrams per class
+
+### 5.4 Evaluation Script
+- [ ] **Create `scripts/evaluate_susceptibility.py`**
   - Load checkpoint and test data
   - Compute all metrics
-  - Generate confusion matrix
+  - Generate confusion matrix visualization
   - Save predictions to CSV for analysis
 
-### 6.3 Attention Visualization
-- [ ] **Create `scripts/visualization/attention_analysis.py`**
-  - Extract spatial attention: which cliff locations are critical
-  - Extract temporal attention: which past epochs matter
-  - Extract cross-attention: which environmental events drive erosion
-  - Generate attention heatmaps overlaid on cliff profiles
+---
+
+## Phase 6: Deployment Pipeline
+
+Operational risk map generation.
+
+### 6.1 Inference Script
+- [ ] **Create `scripts/generate_risk_map.py`**
+  - Input: trained model, latest survey cube, environmental data
+  - Output: risk map with per-transect predictions
+
+### 6.2 Risk Map Visualization
+- [ ] **Create `apps/risk_map_viewer/` Streamlit app**
+  - Interactive map colored by risk score
+  - Click transect for details (class probs, uncertainty, recent M3C2)
+  - Comparison to previous assessment
+
+### 6.3 Output Format
+- [ ] **Define risk map output schema**
+  - Per-transect: predicted_class, class_probabilities, risk_score, risk_category, model_confidence
+  - Spatial: latitude, longitude, mop_id
+  - Context: recent_change_m, historical_events
+
+### 6.4 Documentation
+- [ ] **Create `docs/risk_map_guide.md`**
+  - Interpretation guide for coastal managers
+  - Risk category definitions and recommended actions
+  - Limitations and uncertainty communication
 
 ---
 
@@ -291,14 +257,13 @@ Comprehensive evaluation with stratified metrics.
 
 Iterate based on evaluation results.
 
-### 7.1 Class Imbalance
-- [ ] **Implement focal loss option for event classification**
-  - Alpha weights: [0.25, 0.5, 1.0, 2.0] for [stable, minor, major, failure]
+### 7.1 Class Imbalance Mitigation
+- [ ] **Experiment with focal loss**
   - Gamma=2.0 for focusing on hard examples
+  - Compare to weighted cross-entropy
 
-- [ ] **Experiment with oversampling rare classes**
-  - Duplicate failure samples in training set
-  - Or use weighted random sampler
+- [ ] **Experiment with oversampling**
+  - Weighted random sampler for rare classes
 
 ### 7.2 Hyperparameter Tuning
 - [ ] **Grid search key hyperparameters**
@@ -307,9 +272,16 @@ Iterate based on evaluation results.
   - n_layers: [2, 3, 4]
   - dropout: [0.1, 0.2]
 
-### 7.3 Ensemble (Optional)
-- [ ] **Train multiple models with different seeds**
-- [ ] **Implement prediction averaging**
+### 7.3 Spatial Generalization
+- [ ] **Leave-one-beach-out cross-validation**
+  - Test generalization to unseen beaches
+  - Identify beach-specific vs general patterns
+
+### 7.4 Attention Analysis
+- [ ] **Create `scripts/visualization/attention_analysis.py`**
+  - Extract and visualize spatial attention (which cliff locations matter)
+  - Extract and visualize temporal attention (which past epochs matter)
+  - Extract and visualize cross-attention (which environmental conditions matter)
 
 ---
 
@@ -320,49 +292,61 @@ From `model_plan.md` Section "Success Metrics":
 ### Minimum Viable Performance
 | Metric | Target |
 |--------|--------|
-| Event Detection AUC | > 0.70 |
-| Volume Log-MAE | < 1.0 |
-| Risk Index Correlation | > 0.50 |
-| Event Class F1 (macro) | > 0.40 |
+| Overall Accuracy | > 60% |
+| Large Failure Recall | > 70% |
+| Binary AUC (any event) | > 0.70 |
+| Dangerous AUC (class 3-4) | > 0.75 |
 
 ### Target Performance
 | Metric | Target |
 |--------|--------|
-| Event Detection AUC | > 0.85 |
-| Volume Log-MAE | < 0.5 |
-| Risk Index Correlation | > 0.70 |
-| Event Class F1 (macro) | > 0.55 |
-| Failure Class F1 | > 0.50 |
+| Overall Accuracy | > 70% |
+| Macro F1 | > 0.50 |
+| Large Failure F1 | > 0.60 |
+| Dangerous AUC | > 0.85 |
+| Calibration Error | < 0.10 |
 
 ---
 
 ## Commands Reference
 
 ```bash
-# Extract unified cube (Phase 1)
-python scripts/processing/extract_transects.py --transects data/mops/transects_10m/transect_lines.shp --survey-csv data/raw/master_list.csv --output data/processed/unified_cube.npz --unified --prefer-laz --workers 8
+# Launch labeling interface (Phase 1)
+streamlit run apps/labeling/app.py
 
-# Align events to cube (Phase 2)
-python scripts/processing/align_events.py --cube data/processed/unified_cube.npz --events-dir data/raw/events/ --output data/processed/aligned_events.parquet
+# Prepare training data with water year splits (Phase 2)
+python scripts/processing/prepare_susceptibility_data.py \
+  --cube data/processed/unified_cube.npz \
+  --labels data/labels/erosion_mode_labels.csv \
+  --cdip-dir data/raw/cdip/ \
+  --atmos-dir data/processed/atmospheric/ \
+  --output-dir data/processed/
 
-# Generate training data (Phase 3)
-python scripts/processing/prepare_training_data.py --cube data/processed/unified_cube.npz --events data/processed/aligned_events.parquet --cdip-dir data/raw/cdip/ --atmos-dir data/processed/atmospheric/ --output data/processed/training_data.npz --min-context 3 --max-context 10
+# Validate data (Phase 2)
+python scripts/processing/validate_susceptibility_data.py --data-dir data/processed/
 
-# Validate all data (Phase 3)
-python scripts/processing/validate_all.py --data-dir data/
+# Train model (Phase 4)
+python scripts/train_susceptibility.py --config configs/susceptibility_v1.yaml --wandb-project cliffcast
 
-# Train model (Phase 5)
-python train.py --config configs/cliffcast_v2.yaml --wandb-project cliffcast
+# Evaluate model (Phase 5)
+python scripts/evaluate_susceptibility.py \
+  --checkpoint checkpoints/best.pt \
+  --data data/processed/susceptibility_test.npz \
+  --output results/
 
-# Evaluate model (Phase 6)
-python evaluate.py --checkpoint checkpoints/best.pt --data data/processed/training_data.npz --output results/
+# Generate risk map (Phase 6)
+python scripts/generate_risk_map.py \
+  --checkpoint checkpoints/best.pt \
+  --cube data/processed/latest_survey.npz \
+  --output results/risk_map.csv
 ```
 
 ---
 
 ## Notes
 
-- **Start with Phase 1-3** (data pipeline) before touching model code
-- **Test incrementally**: validate each phase before moving on
-- **Use small subsets first**: test with `--limit 5` or single beach before full runs
-- Blacks beach events not yet available - will be added when M3C2 analysis completes
+- **Phase 1 (labeling) is the critical path** - model training depends on quality labels
+- **Start labeling big events first** - these are most important for the model to learn
+- **Use water year boundaries** - keeps complete storm seasons intact
+- **Test incrementally** - validate each phase before moving on
+- Previous approaches archived in `docs/archive/`

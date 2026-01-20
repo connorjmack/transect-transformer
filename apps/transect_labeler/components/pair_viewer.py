@@ -1,0 +1,176 @@
+"""Side-by-side epoch pair viewer component."""
+
+import numpy as np
+import plotly.graph_objects as go
+import streamlit as st
+
+from apps.transect_labeler import config
+from apps.transect_labeler.utils.data_loader import (
+    get_transect_pair,
+    compute_pair_change,
+    get_transect_ids,
+    get_feature_names,
+)
+
+
+def render_pair_viewer():
+    """Render side-by-side comparison of two consecutive epochs."""
+    if st.session_state.data is None:
+        return
+
+    data = st.session_state.data
+    transect_ids = get_transect_ids(data)
+    transect_idx = st.session_state.current_transect_idx
+    pair_idx = st.session_state.current_pair_idx
+
+    transect_id = transect_ids[transect_idx] if transect_ids else transect_idx
+
+    # Get pair data
+    try:
+        pair_data = get_transect_pair(data, transect_idx, pair_idx)
+    except Exception as e:
+        st.error(f"Error loading transect pair: {e}")
+        return
+
+    # Header with current position info
+    st.subheader(f"Transect {transect_id}: {pair_data['epoch1_date']} -> {pair_data['epoch2_date']}")
+
+    # Create comparison plot
+    fig = _create_comparison_plot(pair_data)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Difference plot below
+    fig_diff = _create_difference_plot(pair_data)
+    st.plotly_chart(fig_diff, use_container_width=True)
+
+    # Summary statistics
+    _render_change_summary(pair_data)
+
+
+def _create_comparison_plot(pair_data: dict) -> go.Figure:
+    """Create overlaid profile plot comparing two epochs."""
+    feature_name = st.session_state.selected_feature
+    feature_names = pair_data.get('feature_names', [])
+
+    # Find feature index
+    if feature_name in feature_names:
+        feature_idx = feature_names.index(feature_name)
+    else:
+        feature_idx = 1  # Default to elevation
+
+    fig = go.Figure()
+
+    # Epoch 1 (earlier)
+    fig.add_trace(go.Scatter(
+        x=pair_data['epoch1']['distances'],
+        y=pair_data['epoch1']['points'][:, feature_idx],
+        mode='lines',
+        name=f'{pair_data["epoch1_date"]} (earlier)',
+        line=dict(color=config.EPOCH_1_COLOR, width=config.PROFILE_LINE_WIDTH),
+    ))
+
+    # Epoch 2 (later)
+    fig.add_trace(go.Scatter(
+        x=pair_data['epoch2']['distances'],
+        y=pair_data['epoch2']['points'][:, feature_idx],
+        mode='lines',
+        name=f'{pair_data["epoch2_date"]} (later)',
+        line=dict(color=config.EPOCH_2_COLOR, width=config.PROFILE_LINE_WIDTH),
+    ))
+
+    unit = config.FEATURE_UNITS.get(feature_name, '')
+    y_label = f"{feature_name} ({unit})" if unit else feature_name
+
+    fig.update_layout(
+        title=f"{feature_name} Profile Comparison",
+        xaxis_title="Distance (m)",
+        yaxis_title=y_label,
+        height=config.PLOT_HEIGHT,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode='x unified',
+    )
+
+    return fig
+
+
+def _create_difference_plot(pair_data: dict) -> go.Figure:
+    """Create difference plot (epoch2 - epoch1)."""
+    feature_name = st.session_state.selected_feature
+    feature_names = pair_data.get('feature_names', [])
+
+    # Find feature index
+    if feature_name in feature_names:
+        feature_idx = feature_names.index(feature_name)
+    else:
+        feature_idx = 1  # Default to elevation
+
+    # Compute change
+    change_data = compute_pair_change(pair_data, feature_idx)
+    distances = change_data['distances']
+    difference = change_data['difference']
+
+    fig = go.Figure()
+
+    # Fill positive (gain) and negative (loss)
+    positive_diff = np.where(difference >= 0, difference, 0)
+    negative_diff = np.where(difference < 0, difference, 0)
+
+    fig.add_trace(go.Scatter(
+        x=distances,
+        y=positive_diff,
+        mode='lines',
+        fill='tozeroy',
+        name='Gain (accretion)',
+        line=dict(color='#27ae60', width=1),
+        fillcolor='rgba(39, 174, 96, 0.3)',
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=distances,
+        y=negative_diff,
+        mode='lines',
+        fill='tozeroy',
+        name='Loss (erosion)',
+        line=dict(color='#e74c3c', width=1),
+        fillcolor='rgba(231, 76, 60, 0.3)',
+    ))
+
+    fig.add_hline(y=0, line_dash="dash", line_color="gray")
+
+    unit = config.FEATURE_UNITS.get(feature_name, '')
+    y_label = f"Delta {feature_name} ({unit})" if unit else f"Delta {feature_name}"
+
+    fig.update_layout(
+        title=f"Change: {pair_data['epoch2_date']} - {pair_data['epoch1_date']}",
+        xaxis_title="Distance (m)",
+        yaxis_title=y_label,
+        height=250,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode='x unified',
+    )
+
+    return fig
+
+
+def _render_change_summary(pair_data: dict):
+    """Render summary statistics for the change."""
+    feature_name = st.session_state.selected_feature
+    feature_names = pair_data.get('feature_names', [])
+
+    # Find feature index
+    if feature_name in feature_names:
+        feature_idx = feature_names.index(feature_name)
+    else:
+        feature_idx = 1
+
+    change_data = compute_pair_change(pair_data, feature_idx)
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Mean Change", f"{change_data['mean_change']:.3f}")
+    with col2:
+        st.metric("Max Gain", f"{change_data['max_gain']:.3f}")
+    with col3:
+        st.metric("Max Loss", f"{change_data['max_loss']:.3f}")
+    with col4:
+        st.metric("Std Dev", f"{change_data['std_change']:.3f}")

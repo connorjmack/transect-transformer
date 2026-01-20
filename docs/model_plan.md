@@ -331,25 +331,36 @@ class SusceptibilityLoss(nn.Module):
 
 ## Evaluation Strategy
 
-### Temporal Holdout (Primary)
+### Survey Frequency and Data Volume
 
-Train on early epochs, validate on later epochs:
+LiDAR surveys are collected weekly to biweekly, providing high temporal resolution:
 
-```
-Training:   Epochs 1-6 (2017-2022)
-Validation: Epochs 6-7 (2022-2023) - hyperparameter tuning
-Test:       Epochs 7-8 (2023-2024) - final evaluation
-```
+- ~50 surveys per year × 9 years (2017-2025) = ~400+ surveys
+- ~2000 transects × 400 epoch pairs = ~800,000 transect-epoch pairs
 
-This tests: do susceptibility patterns learned from historical data predict future events?
+Most epoch pairs show minimal change (weekly intervals are short). The labeling workflow pre-filters using M3C2 thresholds to prioritize significant events for manual labeling; stable pairs are labeled programmatically.
+
+### Water Year Splits (Primary)
+
+Splits are defined by **water year boundaries (October 1 - March 31)** to keep complete storm seasons intact. Winter storms drive most erosion, so splitting mid-season would leak information.
+
+| Set | Water Years | Date Range | Purpose |
+|-----|-------------|------------|---------|
+| **Train** | WY2017-WY2023 | Oct 2016 - Mar 2023 | Learn susceptibility patterns |
+| **Validation** | WY2024 | Oct 2023 - Mar 2024 | Hyperparameter tuning, early stopping |
+| **Test** | WY2025 | Oct 2024 - Mar 2025 | Final held-out evaluation |
+
+This tests: do susceptibility patterns learned from 7 water years of data predict events in held-out future years?
+
+**Note**: Surveys outside the storm season (April-September) are included with their corresponding water year. A survey from July 2023 belongs to the WY2023 training set.
 
 ### Spatial Holdout (Generalization)
 
-Leave-one-beach-out cross-validation:
+Leave-one-beach-out cross-validation within the training period:
 
 ```
-Fold 1: Train on 5 beaches, test on Blacks
-Fold 2: Train on 5 beaches, test on Del Mar
+Fold 1: Train on 5 beaches (WY2017-WY2023), validate on Blacks (WY2017-WY2023)
+Fold 2: Train on 5 beaches (WY2017-WY2023), validate on Del Mar (WY2017-WY2023)
 ...
 ```
 
@@ -358,11 +369,11 @@ This tests: does the model generalize to new locations?
 ### Combined Spatial-Temporal (Hardest Test)
 
 ```
-Train: 5 beaches, epochs 1-6
-Test:  Held-out beach, epochs 7-8
+Train: 5 beaches, WY2017-WY2023
+Test:  Held-out beach, WY2024-WY2025
 ```
 
-This tests: can the model predict susceptibility for a new location in a future time period?
+This tests: can the model predict susceptibility for a new location in future time periods?
 
 ### Metrics
 
@@ -629,10 +640,12 @@ loss:
   label_smoothing: 0.1
 
 evaluation:
+  # Water year splits (Oct 1 - Sep 30)
+  # WY2017 = Oct 2016 - Sep 2017, etc.
   temporal_split:
-    train_epochs: [1, 2, 3, 4, 5, 6]
-    val_epochs: [6, 7]
-    test_epochs: [7, 8]
+    train_water_years: [2017, 2018, 2019, 2020, 2021, 2022, 2023]  # WY2017-WY2023
+    val_water_years: [2024]   # WY2024: Oct 2023 - Sep 2024
+    test_water_years: [2025]  # WY2025: Oct 2024 - Sep 2025
   spatial_holdout_beach: null  # Set for spatial generalization test
 ```
 

@@ -24,6 +24,15 @@ def render_sidebar() -> str:
     """
     st.sidebar.title("CliffCast Viewer")
 
+    # View mode selection (at top for easy access)
+    view_mode = st.sidebar.selectbox(
+        "View",
+        config.VIEW_MODES,
+        label_visibility="collapsed",
+    )
+
+    st.sidebar.markdown("---")
+
     # File loading section
     st.sidebar.header("Data Loading")
 
@@ -60,14 +69,6 @@ def render_sidebar() -> str:
 
     # Show loaded data info
     _render_data_info()
-
-    # View mode selection
-    st.sidebar.header("View Mode")
-    view_mode = st.sidebar.selectbox(
-        "Select view",
-        config.VIEW_MODES,
-        label_visibility="collapsed",
-    )
 
     # View-specific options
     _render_view_options(view_mode)
@@ -157,14 +158,6 @@ def _render_data_info():
     # Show temporal info for cube format
     if is_cube:
         st.sidebar.metric("Temporal Epochs", dims['n_epochs'])
-
-        # Show epoch dates
-        epoch_dates = get_epoch_dates(data)
-        if epoch_dates:
-            st.sidebar.markdown("**Epoch Dates:**")
-            for i, date in enumerate(epoch_dates):
-                date_str = date[:10] if len(date) >= 10 else date
-                st.sidebar.text(f"  {i}: {date_str}")
     else:
         st.sidebar.info("Flat format (single epoch)")
 

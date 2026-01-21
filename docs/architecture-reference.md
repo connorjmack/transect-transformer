@@ -185,14 +185,14 @@ attn_outputs = model.get_attention_weights(...)
 
 - **Spatio-temporal hierarchy**: Spatial attention within timesteps, then temporal attention across timesteps
 - **Pre-norm transformers**: All transformer layers use pre-normalization for training stability
-- **Phased training**: Enable prediction heads incrementally (risk → retreat → collapse → failure mode)
+- **Susceptibility framing**: Nowcast "what erosion mode is this transect susceptible to?" rather than forecasting events
 - **Distance-based spatial encoding**: Transects use actual distance from cliff toe, not sequential indices
 - **Learned temporal encoding**: LiDAR epochs use learned positional embeddings to capture temporal relationships
 - **Multi-scale attention for interpretability**:
-  - Temporal attention → which past scans matter for prediction
-  - Spatial attention → which cliff locations are critical
-  - Cross-attention → which environmental events drive erosion
-- **Multi-task learning**: Shared encoder backbone with task-specific heads and weighted loss combination
+  - Temporal attention → which past scans show precursor patterns
+  - Spatial attention → which cliff locations indicate susceptibility
+  - Cross-attention → which environmental conditions matter
+- **Derived risk scores**: Risk computed from class probabilities weighted by consequence, not learned separately
 - **Cube data format**: Transects stored as (n_transects, T, N, 12) to enable efficient temporal batching
 
 ---

@@ -369,32 +369,33 @@ event_schema = {
 }
 ```
 
-### 3.4 Event Classification Thresholds
+### 3.4 Erosion Mode Classification
+
+The model uses **manually labeled erosion mode classes** based on physical process, not volume thresholds. Labels are assigned during the labeling phase using the dominance hierarchy.
 
 ```python
-# Volume-based event classification
-# Thresholds calibrated from Del Mar distribution analysis
+# 5-class erosion mode classification
+# Based on physical process, not volume
 
-EVENT_CLASS_THRESHOLDS = {
-    'stable': (0, 10),        # Class 0: < 10 m³
-    'minor': (10, 50),        # Class 1: 10-50 m³
-    'major': (50, 200),       # Class 2: 50-200 m³
-    'failure': (200, np.inf), # Class 3: ≥ 200 m³
+EROSION_MODE_CLASSES = {
+    0: 'stable',              # No significant change
+    1: 'beach_erosion',       # Sediment transport, tidal processes
+    2: 'toe_erosion',         # Wave undercutting at cliff base
+    3: 'small_rockfall',      # Weathering-driven small failures
+    4: 'large_failure',       # Major structural collapse
 }
 
-def volume_to_class(volume: float) -> int:
-    """Convert volume to event class index."""
-    if volume < 10:
-        return 0  # stable
-    elif volume < 50:
-        return 1  # minor
-    elif volume < 200:
-        return 2  # major
-    else:
-        return 3  # failure
+EROSION_MODE_NAMES = ['stable', 'beach_erosion', 'toe_erosion', 'small_rockfall', 'large_failure']
 
-EVENT_CLASS_NAMES = ['stable', 'minor', 'major', 'failure']
+# Dominance hierarchy for labeling (when multiple processes occur)
+# Large failure > Small rockfall > Toe erosion > Beach erosion > Stable
+DOMINANCE_ORDER = [4, 3, 2, 1, 0]
+
+# Risk weights for derived risk score
+RISK_WEIGHTS = [0.0, 0.1, 0.4, 0.6, 1.0]
 ```
+
+**Note**: Event CSVs from M3C2 analysis are used for pre-filtering candidates and providing M3C2 change visualization during labeling, but the final erosion mode labels are assigned manually.
 
 ### 3.5 Loading Events
 
@@ -461,11 +462,12 @@ def load_events(beach: str, events_dir: str = 'data/raw/events') -> pd.DataFrame
     if missing:
         raise ValueError(f'Missing required columns: {missing}')
 
-    # Add event class
-    df['event_class'] = df['volume'].apply(volume_to_class)
-
     # Add beach identifier (normalized to lowercase)
     df['beach'] = beach.lower()
+
+    # Note: erosion_mode labels are assigned manually during labeling,
+    # not derived from volume. Event CSVs are used for pre-filtering
+    # and M3C2 visualization during the labeling process.
 
     return df
 
@@ -886,7 +888,7 @@ def align_event_to_cube(
 ### 7.1 File Format
 
 - **Format**: NumPy NPZ (compressed)
-- **Location**: `data/processed/training_data.npz`
+- **Location**: `data/processed/susceptibility_{train,val,test}.npz`
 
 ### 7.2 Schema
 
@@ -895,7 +897,7 @@ training_data_schema = {
     # === INPUT FEATURES ===
     'point_features': {
         'dtype': 'float32',
-        'shape': (n_samples, max_context_epochs, 128, 13),
+        'shape': (n_samples, max_context_epochs, 128, 12),
         'description': 'Padded transect point features (context epochs only)',
     },
     'metadata': {
@@ -908,6 +910,11 @@ training_data_schema = {
         'shape': (n_samples, max_context_epochs, 128),
         'description': 'Padded distance arrays',
     },
+    'm3c2_recent': {
+        'dtype': 'float32',
+        'shape': (n_samples, 128),
+        'description': 'M3C2 distance from most recent epoch pair',
+    },
     'context_mask': {
         'dtype': 'bool',
         'shape': (n_samples, max_context_epochs),
@@ -916,7 +923,7 @@ training_data_schema = {
     'wave_features': {
         'dtype': 'float32',
         'shape': (n_samples, 360, 4),
-        'description': '90 days of wave data @ 6hr before target',
+        'description': '90 days of wave data @ 6hr before current epoch',
     },
     'wave_doy': {
         'dtype': 'int32',
@@ -926,74 +933,37 @@ training_data_schema = {
     'atmos_features': {
         'dtype': 'float32',
         'shape': (n_samples, 90, 24),
-        'description': '90 days of atmospheric data @ daily before target',
+        'description': '90 days of atmospheric data @ daily before current epoch',
     },
     'atmos_doy': {
         'dtype': 'int32',
         'shape': (n_samples, 90),
         'description': 'Day-of-year for atmospheric timesteps (1-366)',
     },
-    
+
     # === LABELS ===
-    'total_volume': {
-        'dtype': 'float32',
-        'shape': (n_samples,),
-        'units': 'cubic meters',
-        'description': 'Total eroded volume in prediction window',
-    },
-    'event_class': {
+    'erosion_class': {
         'dtype': 'int32',
         'shape': (n_samples,),
-        'values': [0, 1, 2, 3],
-        'description': 'Event class: 0=stable, 1=minor, 2=major, 3=failure',
+        'values': [0, 1, 2, 3, 4],
+        'description': 'Erosion mode: 0=stable, 1=beach, 2=toe, 3=rockfall, 4=large_failure',
     },
-    'risk_index': {
-        'dtype': 'float32',
-        'shape': (n_samples,),
-        'range': [0, 1],
-        'description': 'Computed risk index from volume + cliff height',
-    },
-    'n_events': {
-        'dtype': 'int32',
-        'shape': (n_samples,),
-        'description': 'Number of discrete events in prediction window',
-    },
-    
-    # === LABEL METADATA ===
-    'label_source': {
-        'dtype': 'int32',
-        'shape': (n_samples,),
-        'values': [0, 1],
-        'description': '0=derived from LiDAR, 1=observed from event CSV',
-    },
-    'confidence': {
-        'dtype': 'float32',
-        'shape': (n_samples,),
-        'range': [0, 1],
-        'description': 'Label confidence (1.0 for observed, 0.5 for derived)',
-    },
-    'volume_unc': {
-        'dtype': 'float32',
-        'shape': (n_samples,),
-        'units': 'cubic meters',
-        'description': 'Volume uncertainty (from M3C2 propagation)',
-    },
-    
+
     # === SAMPLE INFO ===
     'transect_idx': {
         'dtype': 'int32',
         'shape': (n_samples,),
         'description': 'Index into unified cube',
     },
-    'target_epoch': {
+    'epoch_before': {
         'dtype': 'int32',
         'shape': (n_samples,),
-        'description': 'Target epoch index',
+        'description': 'Epoch index before the labeled transition',
     },
-    'context_epochs': {
-        'dtype': 'object',  # Variable length lists
+    'epoch_after': {
+        'dtype': 'int32',
         'shape': (n_samples,),
-        'description': 'List of context epoch indices per sample',
+        'description': 'Epoch index after the labeled transition',
     },
     'mop_id': {
         'dtype': 'int32',
@@ -1005,15 +975,10 @@ training_data_schema = {
         'shape': (n_samples,),
         'description': 'Beach name for sample',
     },
-    'prediction_window_start': {
+    'water_year': {
         'dtype': 'int32',
         'shape': (n_samples,),
-        'description': 'Ordinal date of last context epoch',
-    },
-    'prediction_window_end': {
-        'dtype': 'int32',
-        'shape': (n_samples,),
-        'description': 'Ordinal date of target epoch',
+        'description': 'Water year (Oct 1 of year N-1 to Sep 30 of year N)',
     },
 }
 ```
@@ -1158,18 +1123,16 @@ def validate_training_data(data: dict) -> list[str]:
     """
     errors = []
     
-    n_samples = len(data['total_volume'])
-    
+    n_samples = len(data['erosion_class'])
+
     # Shape checks
     expected_shapes = {
-        'point_features': (n_samples, -1, 128, 13),  # -1 = max_context
+        'point_features': (n_samples, -1, 128, 12),  # -1 = max_context
         'metadata': (n_samples, -1, 12),
+        'm3c2_recent': (n_samples, 128),
         'wave_features': (n_samples, 360, 4),
         'atmos_features': (n_samples, 90, 24),
-        'total_volume': (n_samples,),
-        'event_class': (n_samples,),
-        'risk_index': (n_samples,),
-        'confidence': (n_samples,),
+        'erosion_class': (n_samples,),
     }
     
     for key, expected in expected_shapes.items():
@@ -1183,34 +1146,19 @@ def validate_training_data(data: dict) -> list[str]:
                 errors.append(f'{key} shape mismatch at dim {i}: expected {e}, got {a}')
     
     # Value ranges
-    if (data['event_class'] < 0).any() or (data['event_class'] > 3).any():
-        errors.append('event_class values outside [0, 3]')
-    
-    if (data['risk_index'] < 0).any() or (data['risk_index'] > 1).any():
-        errors.append('risk_index values outside [0, 1]')
-    
-    if (data['confidence'] < 0).any() or (data['confidence'] > 1).any():
-        errors.append('confidence values outside [0, 1]')
-    
-    if (data['label_source'] < 0).any() or (data['label_source'] > 1).any():
-        errors.append('label_source values outside [0, 1]')
-    
+    if (data['erosion_class'] < 0).any() or (data['erosion_class'] > 4).any():
+        errors.append('erosion_class values outside [0, 4]')
+
     # No NaN in labels
-    for key in ['total_volume', 'event_class', 'risk_index']:
-        if np.isnan(data[key]).any():
-            errors.append(f'NaN values in {key}')
-    
+    if np.isnan(data['erosion_class']).any():
+        errors.append('NaN values in erosion_class')
+
     # Check label distribution
-    class_counts = np.bincount(data['event_class'], minlength=4)
+    class_counts = np.bincount(data['erosion_class'], minlength=5)
     if class_counts[0] == n_samples:
         errors.append('WARNING: All samples are class 0 (stable)')
-    if class_counts[3] == 0:
-        errors.append('WARNING: No class 3 (failure) samples')
-    
-    # Check observed ratio
-    observed_ratio = data['label_source'].mean()
-    if observed_ratio < 0.01:
-        errors.append(f'WARNING: Only {observed_ratio:.1%} observed labels')
+    if class_counts[4] == 0:
+        errors.append('WARNING: No class 4 (large_failure) samples')
     
     return errors
 ```
@@ -1436,19 +1384,19 @@ splits/
 
 | Array | Shape | Dtype | Description |
 |-------|-------|-------|-------------|
-| `cube['points']` | (n_transects, n_epochs, 128, 13) | float32 | Point features |
+| `cube['points']` | (n_transects, n_epochs, 128, 12) | float32 | Point features |
 | `cube['coverage_mask']` | (n_transects, n_epochs) | bool | Valid data mask |
-| `training['point_features']` | (n_samples, max_ctx, 128, 13) | float32 | Padded context |
+| `training['point_features']` | (n_samples, max_ctx, 128, 12) | float32 | Padded context |
+| `training['m3c2_recent']` | (n_samples, 128) | float32 | Recent M3C2 change |
 | `training['wave_features']` | (n_samples, 360, 4) | float32 | 90d wave @ 6hr |
 | `training['atmos_features']` | (n_samples, 90, 24) | float32 | 90d atmos @ daily |
-| `training['total_volume']` | (n_samples,) | float32 | Target volume |
-| `training['event_class']` | (n_samples,) | int32 | Target class [0-3] |
+| `training['erosion_class']` | (n_samples,) | int32 | Target class [0-4] |
 
 ### Key Constants
 
 ```python
 # Transect features
-N_POINT_FEATURES = 13
+N_POINT_FEATURES = 12
 N_META_FEATURES = 12
 N_POINTS_PER_TRANSECT = 128
 
@@ -1463,11 +1411,14 @@ ATMOS_TIMESTEPS = 90
 ATMOS_FEATURES = 24
 
 # Training
-MIN_CONTEXT_EPOCHS = 3
-MAX_CONTEXT_EPOCHS = 10
+MIN_CONTEXT_EPOCHS = 2
+MAX_CONTEXT_EPOCHS = 5
 
-# Event classification
-VOLUME_THRESHOLDS = [10, 50, 200]  # stable/minor/major/failure boundaries
+# Erosion mode classification
+N_CLASSES = 5
+CLASS_NAMES = ['stable', 'beach_erosion', 'toe_erosion', 'small_rockfall', 'large_failure']
+RISK_WEIGHTS = [0.0, 0.1, 0.4, 0.6, 1.0]
+CLASS_WEIGHTS = [0.3, 1.0, 2.0, 2.0, 5.0]  # For loss function
 
 # Coordinates
 MOP_SPACING_M = 100

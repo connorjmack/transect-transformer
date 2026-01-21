@@ -63,15 +63,15 @@ This file tracks the project's trajectory, completed phases, key decisions, and 
 
 ---
 
-## Current Phase: Event-Supervised Model Update
+## Current Phase: Susceptibility-Based Classification
 
-**Goal**: Transition from retreat-based to event-supervised learning using M3C2-derived volume measurements.
+**Goal**: Build a 5-class susceptibility classifier that answers "What erosion mode is this transect susceptible to?" using manually labeled erosion mode classes.
 
-**Key Changes Required**:
-1. **Cube Format v2**: Add 13th feature (M3C2 distance), coverage_mask, beach_slices, mop_ids
-2. **Event Alignment**: Connect M3C2 event CSVs to transect cube
-3. **New Prediction Heads**: Replace ExpectedRetreat/FailureMode with VolumeHead/EventClassHead
-4. **Hybrid Labeling**: Observed events (confidence=1.0) + derived labels (confidence=0.5)
+**Key Components**:
+1. **Labeling Infrastructure**: Streamlit app for efficient transect-epoch labeling with M3C2 visualization
+2. **5-Class Classification**: Stable, beach erosion, cliff toe erosion, small rockfall, large upper cliff failure
+3. **Derived Risk Scores**: Risk computed from class probabilities weighted by consequence
+4. **Water Year Splits**: Train WY2017-WY2023, Val WY2024, Test WY2025
 
 **Reference**: See `docs/plan.md` for detailed checklist, `docs/model_plan.md` for target architecture
 
@@ -99,17 +99,17 @@ This file tracks the project's trajectory, completed phases, key decisions, and 
 **Decision**: Cliff embeddings query environmental embeddings (not vice versa).
 **Rationale**: Learns "which environmental conditions explain each cliff location's state" - more interpretable.
 
-### 6. Phased Training Strategy
-**Decision**: Enable prediction heads incrementally (risk → collapse → volume → event class).
-**Rationale**: Easier to debug, ensures encoder learns good representations before adding complex heads.
+### 6. Susceptibility Framing
+**Decision**: Classify "what erosion mode is this transect susceptible to?" rather than predicting events.
+**Rationale**: Sidesteps stochastic trigger prediction; matches how coastal managers use risk information.
 
-### 7. Event Classification Thresholds
-**Decision**: 4 classes based on volume: stable (<10m³), minor (10-50m³), major (50-200m³), failure (≥200m³).
-**Rationale**: Geomorphologically meaningful thresholds based on observed event distribution.
+### 7. 5-Class Erosion Mode Classification
+**Decision**: 5 classes based on physical process: stable, beach erosion, toe erosion, small rockfall, large failure.
+**Rationale**: Classes capture distinct geomorphic processes with different management implications; dominance hierarchy for labeling.
 
-### 8. Confidence-Weighted Loss
-**Decision**: Weight observed events at 1.5x, derived labels at 0.5x confidence.
-**Rationale**: Direct measurements are more reliable than LiDAR-derived change estimates.
+### 8. Asymmetric Loss Weighting
+**Decision**: Class weights [0.3, 1.0, 2.0, 2.0, 5.0] with label smoothing (0.1).
+**Rationale**: Low weight for stable (weak negative evidence), high weight for dangerous events (must not miss).
 
 ---
 
@@ -147,13 +147,22 @@ This file tracks the project's trajectory, completed phases, key decisions, and 
 
 ## Success Metrics (Target)
 
-| Metric | Minimum | Target |
-|--------|---------|--------|
-| Event Detection AUC | > 0.70 | > 0.85 |
-| Volume Log-MAE | < 1.0 | < 0.5 |
-| Risk Index Correlation | > 0.50 | > 0.70 |
-| Event Class F1 (macro) | > 0.40 | > 0.55 |
-| Failure Class F1 | - | > 0.50 |
+### Minimum Viable Performance
+| Metric | Target |
+|--------|--------|
+| Overall Accuracy | > 60% |
+| Large Failure Recall | > 70% |
+| Binary AUC (any event) | > 0.70 |
+| Dangerous AUC (class 3-4) | > 0.75 |
+
+### Target Performance
+| Metric | Target |
+|--------|--------|
+| Overall Accuracy | > 70% |
+| Macro F1 | > 0.50 |
+| Large Failure F1 | > 0.60 |
+| Dangerous AUC | > 0.85 |
+| Calibration Error | < 0.10 |
 
 ---
 

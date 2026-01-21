@@ -1,161 +1,120 @@
 # CliffCast Todo List
 
-## High Priority - Consider Soon
-
-- [ ] **Cube Format v2**: Update unified cube to include:
-  - `coverage_mask` (n_transects, n_epochs) boolean for valid data
-  - `beach_slices` dict mapping beach name to (start_idx, end_idx)
-  - `mop_ids` array with integer MOP IDs
-  - 13th feature: `m3c2_distance` (change to previous epoch)
-  - See `docs/DATA_REQUIREMENTS.md` Section 2 for full spec
+> **Current Priority**: Phase 1 - Labeling Infrastructure
+> **Reference**: See `docs/plan.md` for detailed checklist, `docs/model_plan.md` for target architecture
 
 ---
 
-# Decisions to make
-- should we limit the transect to be only between the cliff toe and cliff top? Can use cliffdelinea2.0 for this. 
-- include beach or no? (beach erosion could be one of the failure classes)
-- failure classes (large upper cliff failure, cliff toe erosion, minor rockfall, beach erosion, construction should be one also)
-- need transect inputs to be refined (m3c2 distance, horizontal/inland change from previous survey? what else?)
-- 
+## Current Phase: Labeling Infrastructure
 
-## Recently Completed
+### Labeling Interface
+- [ ] Create `apps/labeling/` Streamlit app
+  - Side-by-side epoch comparison view
+  - Show M3C2 change colored on profile
+  - Keyboard shortcuts: S=stable, B=beach, T=toe, R=rockfall, F=failure
+  - Progress tracking and session management
 
-### Phase 1: Data Pipeline (COMPLETE)
+### Pre-filtering
+- [ ] Identify candidate pairs using M3C2 thresholds
+  - |mean M3C2| > 0.5m or max erosion > 1m for manual review
+  - Auto-label clearly stable pairs (minimal change)
+
+### Documentation
+- [ ] Create `docs/labeling_guidelines.md`
+  - Visual examples of each class
+  - Decision tree for ambiguous cases
+  - Dominance hierarchy: Large failure > Small rockfall > Toe erosion > Beach erosion > Stable
+
+### Storage
+- [ ] Create label CSV schema
+  - Columns: transect_idx, epoch_before, epoch_after, erosion_class, confidence, labeler, notes
+  - Store in `data/labels/erosion_mode_labels.csv`
+
+---
+
+## Decisions to Make
+
+- [ ] Should we limit the transect to be only between the cliff toe and cliff top? Can use CliffDelinea 2.0 for this.
+- [ ] Include beach in transect or no? (beach erosion is one of the failure classes)
+- [ ] Need transect inputs to be refined (M3C2 distance, horizontal/inland change from previous survey?)
+
+---
+
+## Previously Completed
+
+### Phase 0: Foundation (COMPLETE)
 - [x] ShapefileTransectExtractor for LiDAR point extraction
 - [x] Cube format conversion (n_transects, T, N, 12)
-- [x] Survey CSV input with --beach argument for MOP filtering
-- [x] Date parsing from LAS filenames
 - [x] Canonical beach/MOP range definitions
+- [x] Date parsing from LAS filenames
 
-### Phase 2: Model Implementation (COMPLETE)
+### Model Architecture v1 (COMPLETE)
 - [x] SpatioTemporalTransectEncoder (spatial then temporal attention)
-  - Distance-based sinusoidal positional encoding
-  - Learned temporal positional encoding
-  - Metadata embedding and broadcasting
-  - CLS token pooling
-  - 28 tests passing
 - [x] EnvironmentalEncoder for wave/atmospheric data
-  - Shared architecture for time series
-  - Day-of-year seasonality embedding
-  - Padding mask support
-  - WaveEncoder and AtmosphericEncoder wrappers
-  - 37 tests passing
 - [x] CrossAttentionFusion module
-  - Multi-layer cross-attention (cliff queries environment)
-  - Attention weight extraction for interpretability
-  - Padding mask support
-  - 25 tests passing
-- [x] PredictionHeads (initial four heads implemented)
-  - RiskIndexHead: Sigmoid output [0,1]
-  - ExpectedRetreatHead: Softplus for positive values
-  - CollapseProbabilityHead: Multi-label 4 horizons
-  - FailureModeHead: Multi-class 5 modes
-  - Selective enabling for phased training
-  - 35 tests passing
-  - **TODO**: Update to new heads per model_plan.md (VolumeHead, EventClassHead)
-- [x] CliffCast main model
-  - Full end-to-end model assembly
-  - Flexible configuration
-  - Attention extraction methods
-  - 26 tests passing
+- [x] Initial prediction heads (to be updated to SusceptibilityHead)
+- [x] CliffCast main model assembly
+- [x] **216 tests passing, 100% code coverage**
 
-### Transect Viewer (COMPLETE)
+### Environmental Data Loaders (COMPLETE)
+- [x] CDIPWaveLoader for THREDDS/OPeNDAP wave data access
+- [x] WaveLoader with LRU caching
+- [x] AtmosphericLoader for PRISM-derived features (24 features)
+
+### Transect Viewer App (COMPLETE)
 - [x] Data Dashboard with temporal coverage stats
 - [x] Single Transect Inspector with epoch selection
 - [x] Temporal Slider view with fixed y-axis for comparison
-- [x] Transect Evolution with temporal heatmap (interpolated to common distance grid)
+- [x] Transect Evolution with temporal heatmap
 - [x] Cross-Transect View with spatial analysis
-- [x] String transect ID support (MOP names like "MOP 595")
 
-### Test Suite (216 tests passing)
-- [x] test_transect_extractor.py - 30 tests for extraction + cube format + subsetting + paths
-- [x] test_transect_viewer.py - 27 tests for data_loader + validators
-- [x] test_utils.py - 8 tests for config utilities
-- [x] test_transect_encoder.py - 28 tests for spatio-temporal encoder
-- [x] test_environmental_encoder.py - 37 tests for environmental encoders
-- [x] test_fusion.py - 25 tests for cross-attention fusion
-- [x] test_prediction_heads.py - 35 tests for prediction heads
-- [x] test_cliffcast.py - 26 tests for full model
-- [x] **100% code coverage** for all model components
+### Cliff Delineation Integration (COMPLETE)
+- [x] CliffDelineaTool v2.0 integration for toe/top detection
+- [x] CliffFeatureAdapter transforms 12 features to 13 for detection model
+- [x] Sidecar file output (`*.cliff.npz`) with detection results
 
-### Subset Utility
-- [x] `scripts/processing/subset_transects.py` for filtering NPZ by MOP range
-- [x] Parse MOP numbers from string IDs (e.g., "MOP 595")
-- [x] --beach argument for preset ranges
-- [x] --list flag to inspect cube contents
+---
 
-### Cross-Platform Support
-- [x] Auto-detect OS (Mac vs Linux)
-- [x] Convert paths in survey CSV: `/Volumes/group/...` <-> `/project/group/...`
-- [x] --target-os flag to override auto-detection
+## Future Phases (After Labeling)
 
-## In Progress
+### Phase 2: Data Pipeline
+- [ ] Create `src/data/susceptibility_dataset.py`
+- [ ] Create `scripts/processing/prepare_susceptibility_data.py`
+- [ ] Implement water year splitting logic (WY2017-WY2023 train, WY2024 val, WY2025 test)
+- [ ] Create `scripts/processing/validate_susceptibility_data.py`
 
-### Data Collection
-- [ ] Process all beaches through extraction pipeline
-- [ ] Validate cube files with transect viewer
-- [ ] Generate per-beach NPZ files (recommend <500MB each)
-- [ ] Download wave data (CDIP MOP system)
-- [ ] Process atmospheric data (PRISM + computed features)
+### Phase 3: Model Updates
+- [ ] Create `src/models/susceptibility_head.py` (5-class classification)
+- [ ] Update `src/models/cliffcast.py` with SusceptibilityHead
+- [ ] Implement risk score derivation from class probabilities
+- [ ] Update model tests for 5-class output
 
-## Next Steps
+### Phase 4: Training Infrastructure
+- [ ] Create `src/training/susceptibility_loss.py` (weighted cross-entropy)
+- [ ] Create `scripts/train_susceptibility.py`
+- [ ] Implement data augmentation (geometric, temporal)
+- [ ] Create `configs/susceptibility_v1.yaml`
 
-### Phase 3: Training Infrastructure
-- [ ] Dataset class for cube format data
-  - Load transect NPZ files
-  - Integrate wave loader (CDIP)
-  - Integrate atmospheric loader
-  - Handle temporal alignment
-  - Batch collation with padding
-- [ ] Loss functions (CliffCastLoss)
-  - Volume: Smooth L1 loss on log(vol+1) (weight=1.0)
-  - Event Classification: Cross-entropy with focal loss option (weight=1.0)
-  - Risk Index: Smooth L1 loss (weight=1.0)
-  - Collapse Probability: Binary cross-entropy (weight=2.0)
-  - Confidence weighting (observed events weighted higher)
-  - Combined weighted loss
-- [ ] Training loop with W&B logging
-  - Optimizer (AdamW) + scheduler (cosine)
-  - Gradient clipping
-  - Mixed precision training (AMP)
-  - Checkpointing (save top-k)
-  - Early stopping
-- [ ] Validation on synthetic data
-  - Generate synthetic transects with known relationships
-  - Verify model learns expected patterns
-  - Debug training on small scale
+### Phase 5: Evaluation
+- [ ] Create `src/training/metrics.py` (per-class F1, macro F1, calibration)
+- [ ] Implement ranking metrics (ROC-AUC for binary, dangerous)
+- [ ] Create `scripts/evaluate_susceptibility.py`
 
-### Phase 4: Evaluation & Metrics
-- [ ] Evaluation metrics
-  - Volume: MAE, RMSE, Log-MAE, correlation
-  - Event Classification: Accuracy, per-class F1, confusion matrix, detection AUC
-  - Risk Index: MAE, RMSE, correlation
-  - Collapse Probability: AUC-ROC, precision-recall, calibration (ECE)
-  - Stratified metrics: observed vs derived labels
-- [ ] Baseline comparisons
-  - Linear regression baseline
-  - Random forest baseline
-  - Simple MLP baseline
-- [ ] Attention visualization tools
-  - Spatial attention heatmaps on cliff profiles
-  - Temporal attention over LiDAR epochs
-  - Environmental attention over storms/events
-  - Interactive visualization app
+### Phase 6: Deployment
+- [ ] Create `scripts/generate_risk_map.py`
+- [ ] Create `apps/risk_map_viewer/` Streamlit app
+- [ ] Create `docs/risk_map_guide.md`
+
+---
 
 ## Backlog
 
-### Phase 5: Production Deployment
-- [ ] Batch inference pipeline for state-wide predictions
-- [ ] Model serving API
-- [ ] Uncertainty quantification
-- [ ] Model interpretation dashboard
-- [ ] Transfer learning to other coastlines
-- [ ] 3D context enhancement (Option C)
-
 ### Data Enhancements
-- [ ] Additional environmental features
-  - Sea level data
-  - Storm surge predictions
-  - Groundwater levels
+- [ ] Additional environmental features (sea level, storm surge, groundwater)
 - [ ] Multi-scale modeling (cliff + beach + regional)
 - [ ] Incorporate historical failure data
+
+### Model Enhancements
+- [ ] MC Dropout for uncertainty quantification
+- [ ] Attention visualization tools
+- [ ] Transfer learning to other coastlines

@@ -1,0 +1,64 @@
+# CliffCast Susceptibility Classification Config v1
+# 5-class erosion mode classification
+
+# Model architecture
+model:
+  d_model: 256
+  n_heads: 8
+  dropout: 0.1
+
+  # Transect encoder
+  n_layers_spatial: 2
+  n_layers_temporal: 2
+  max_timesteps: 20
+  n_point_features: 7    # After cleaning: distance_m, elevation_m, slope_deg, curvature, roughness, intensity, classification
+  n_metadata_features: 12
+
+  # Environmental encoders
+  n_layers_env: 3
+  n_wave_features: 4     # hs, tp, dp, power
+  n_atmos_features: 24   # Full atmospheric feature set
+
+  # Fusion
+  n_layers_fusion: 2
+
+# Data paths
+data:
+  train_path: data/processed/training_data_300.npz
+  # val_path: data/processed/validation_data.npz  # Uncomment when available
+
+# Training hyperparameters
+training:
+  batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  max_epochs: 100
+  min_lr: 1.0e-6
+
+  # Gradient clipping
+  gradient_clip: 1.0
+
+  # Mixed precision (set to true for faster training on GPU)
+  use_amp: false
+
+  # Loss function
+  label_smoothing: 0.1
+  # Class weights applied internally: [0.3, 1.0, 2.0, 2.0, 5.0]
+
+  # Data loading
+  num_workers: 4
+  use_weighted_sampler: true  # Oversample rare classes
+
+  # Early stopping
+  early_stopping_patience: 15
+
+# Logging (optional W&B integration)
+logging:
+  use_wandb: false
+  wandb_project: cliffcast
+  log_every_n_steps: 10
+
+# Paths
+paths:
+  checkpoint_dir: checkpoints
+  output_dir: outputs

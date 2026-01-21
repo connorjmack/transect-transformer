@@ -7,6 +7,7 @@ from src.data.dataset import CliffCastDataset, collate_fn
 from src.data.wave_loader import WaveLoader
 from src.data.atmos_loader import AtmosphericLoader
 from src.data.wave_features import WaveMetricsCalculator, WaveMetricsConfig
+from src.data.susceptibility_dataset import SusceptibilityDataset, create_data_loaders
 from src.data import parsers
 
 __all__ = [
@@ -20,5 +21,7 @@ __all__ = [
     "AtmosphericLoader",
     "WaveMetricsCalculator",
     "WaveMetricsConfig",
+    "SusceptibilityDataset",
+    "create_data_loaders",
     "parsers",
 ]

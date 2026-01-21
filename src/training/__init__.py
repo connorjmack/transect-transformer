@@ -7,6 +7,10 @@ from src.training.losses import (
     CollapseProbabilityLoss,
     FailureModeLoss,
 )
+from src.training.susceptibility_loss import (
+    SusceptibilityLoss,
+    FocalSusceptibilityLoss,
+)
 
 __all__ = [
     "CliffCastLoss",
@@ -14,4 +18,6 @@ __all__ = [
     "ExpectedRetreatLoss",
     "CollapseProbabilityLoss",
     "FailureModeLoss",
+    "SusceptibilityLoss",
+    "FocalSusceptibilityLoss",
 ]

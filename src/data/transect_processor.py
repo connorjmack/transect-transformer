@@ -6,13 +6,27 @@ CliffCast susceptibility model.
 
 Processing steps:
     1. Load raw transects and cliff delineation results
-    2. For each transect-epoch with valid cliff detection:
-        a. Define window: [toe_distance - 10m] to [top_distance + 5m]
+    2. Compute reference windows for temporal consistency (optional, default)
+       - Uses the first epoch with valid cliff detection as the reference
+       - All epochs of a transect use the same spatial window
+       - Ensures consistent distance values across time for the same physical location
+    3. For each transect-epoch with valid cliff detection:
+        a. Define window: [ref_toe - 10m] to [ref_top + 5m] (using reference)
         b. Crop points within window
         c. Resample to 128 points
         d. Drop RGB and return features (keep 7 features)
         e. Recompute slope/curvature on resampled points
-    3. Save processed transects with updated metadata
+    4. Save processed transects with updated metadata
+
+Temporal Consistency:
+    By default (reference_epoch='first'), the processor uses the first epoch's
+    cliff positions to define the window for ALL epochs of a transect. This
+    ensures that distance values are comparable across time - the same physical
+    location has the same distance value in all epochs. This is critical for
+    temporal analysis where you want to track how a specific location changes.
+
+    Set reference_epoch='per_epoch' for legacy behavior where each epoch uses
+    its own cliff detection (not recommended for temporal analysis).
 
 Usage:
     >>> from src.data.transect_processor import TransectProcessor
@@ -126,6 +140,56 @@ class TransectProcessor:
             f"reference_epoch={reference_epoch}"
         )
 
+    def _compute_reference_windows(
+        self,
+        toe_distances: np.ndarray,
+        top_distances: np.ndarray,
+        has_cliff: np.ndarray,
+        n_transects: int,
+        n_epochs: int,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Compute reference toe/top positions for each transect.
+
+        For 'first' mode: finds the first epoch with valid cliff detection
+        and uses those positions as the reference for ALL epochs of that transect.
+
+        Args:
+            toe_distances: (n_transects, n_epochs) toe distances
+            top_distances: (n_transects, n_epochs) top distances
+            has_cliff: (n_transects, n_epochs) cliff detection flags
+            n_transects: Number of transects
+            n_epochs: Number of epochs
+
+        Returns:
+            Tuple of (ref_toe, ref_top, ref_epoch_idx) arrays, each (n_transects,).
+            ref_epoch_idx contains the epoch index used as reference (-1 if none found).
+        """
+        ref_toe = np.full(n_transects, np.nan, dtype=np.float32)
+        ref_top = np.full(n_transects, np.nan, dtype=np.float32)
+        ref_epoch_idx = np.full(n_transects, -1, dtype=np.int32)
+
+        for t_idx in range(n_transects):
+            # Find first epoch with valid cliff detection meeting width criteria
+            for e_idx in range(n_epochs):
+                if has_cliff[t_idx, e_idx]:
+                    toe = toe_distances[t_idx, e_idx]
+                    top = top_distances[t_idx, e_idx]
+                    cliff_width = top - toe
+
+                    if cliff_width >= self.min_cliff_width_m:
+                        ref_toe[t_idx] = toe
+                        ref_top[t_idx] = top
+                        ref_epoch_idx[t_idx] = e_idx
+                        break
+
+        n_with_ref = np.sum(~np.isnan(ref_toe))
+        logger.info(
+            f"Reference windows computed: {n_with_ref}/{n_transects} transects "
+            f"have valid reference from first epoch"
+        )
+
+        return ref_toe, ref_top, ref_epoch_idx
+
     def process(
         self,
         raw_npz_path: Union[str, Path],
@@ -201,6 +265,17 @@ class TransectProcessor:
             toe_confidences = toe_confidences[:, np.newaxis]
             top_confidences = top_confidences[:, np.newaxis]
 
+        # Compute reference windows for temporal consistency
+        if self.reference_epoch == 'first':
+            ref_toe, ref_top, ref_epoch_idx = self._compute_reference_windows(
+                toe_distances, top_distances, has_cliff, n_transects, n_epochs
+            )
+        else:
+            # per_epoch mode: no reference, each epoch uses its own detection
+            ref_toe = None
+            ref_top = None
+            ref_epoch_idx = np.full(n_transects, -1, dtype=np.int32)
+
         # Initialize output arrays
         n_output_features = len(KEEP_FEATURE_INDICES)
         out_points = np.full(
@@ -227,6 +302,11 @@ class TransectProcessor:
         delineation_confidence = np.full((n_transects, n_epochs), np.nan, dtype=np.float32)
         used_fallback = np.zeros((n_transects, n_epochs), dtype=bool)
 
+        # Reference window arrays (for temporal consistency mode)
+        # These are the same for all epochs of a transect when reference_epoch='first'
+        reference_toe_m = ref_toe if ref_toe is not None else np.full(n_transects, np.nan, dtype=np.float32)
+        reference_top_m = ref_top if ref_top is not None else np.full(n_transects, np.nan, dtype=np.float32)
+
         # Processing statistics
         stats = {
             'n_processed': 0,
@@ -252,8 +332,35 @@ class TransectProcessor:
                 raw_dist = distances[t_idx, e_idx]  # (n_raw_points,)
                 raw_meta = metadata[t_idx, e_idx]  # (n_meta,)
 
-                # Determine window based on cliff detection
-                if has_cliff[t_idx, e_idx]:
+                # Determine window based on cliff detection (with reference mode support)
+                # In 'first' mode, use reference window for ALL epochs of a transect
+                # In 'per_epoch' mode, use each epoch's own detection (legacy behavior)
+
+                # Check if we have a reference window for this transect
+                has_reference = (
+                    self.reference_epoch == 'first'
+                    and ref_toe is not None
+                    and not np.isnan(ref_toe[t_idx])
+                )
+
+                if has_reference:
+                    # Use reference window (from first valid epoch) for temporal consistency
+                    ref_toe_dist = ref_toe[t_idx]
+                    ref_top_dist = ref_top[t_idx]
+                    win_start = max(raw_dist[0], ref_toe_dist - self.toe_buffer_m)
+                    win_end = min(raw_dist[-1], ref_top_dist + self.top_buffer_m)
+                    stats['n_with_cliff'] += 1
+
+                    # Store per-epoch toe/top for display (even though window is from reference)
+                    if has_cliff[t_idx, e_idx]:
+                        toe_distance_m[t_idx, e_idx] = toe_distances[t_idx, e_idx]
+                        top_distance_m[t_idx, e_idx] = top_distances[t_idx, e_idx]
+                        delineation_confidence[t_idx, e_idx] = (
+                            toe_confidences[t_idx, e_idx] + top_confidences[t_idx, e_idx]
+                        ) / 2.0
+
+                elif has_cliff[t_idx, e_idx]:
+                    # per_epoch mode OR no reference available: use this epoch's detection
                     toe_dist = toe_distances[t_idx, e_idx]
                     top_dist = top_distances[t_idx, e_idx]
                     cliff_width = top_dist - toe_dist
@@ -277,12 +384,11 @@ class TransectProcessor:
 
                     toe_distance_m[t_idx, e_idx] = toe_dist
                     top_distance_m[t_idx, e_idx] = top_dist
-                    # Relative positions (will be computed after win_start is finalized)
                     delineation_confidence[t_idx, e_idx] = (
                         toe_confidences[t_idx, e_idx] + top_confidences[t_idx, e_idx]
                     ) / 2.0
                 else:
-                    # No cliff detected
+                    # No cliff detected and no reference available
                     if self.fallback_to_full:
                         win_start = raw_dist[0]
                         win_end = raw_dist[-1]
@@ -351,6 +457,12 @@ class TransectProcessor:
             'delineation_confidence': delineation_confidence,
             'used_fallback': used_fallback,
 
+            # Reference window information (for temporal consistency mode)
+            # These are per-transect (same for all epochs of a transect)
+            'reference_toe_m': reference_toe_m,
+            'reference_top_m': reference_top_m,
+            'reference_epoch_idx': ref_epoch_idx,
+
             # Feature info
             'feature_names': np.array(OUTPUT_FEATURE_NAMES, dtype=object),
 
@@ -372,6 +484,7 @@ class TransectProcessor:
             'top_buffer_m': self.top_buffer_m,
             'min_cliff_width_m': self.min_cliff_width_m,
             'fallback_to_full': self.fallback_to_full,
+            'reference_epoch': self.reference_epoch,
             'raw_feature_count': n_raw_features,
             'output_feature_count': n_output_features,
         })
@@ -525,6 +638,7 @@ def process_directory(
     top_buffer_m: float = 5.0,
     min_cliff_width_m: float = 5.0,
     fallback_to_full: bool = True,
+    reference_epoch: str = 'first',
     pattern: str = "*.npz",
     skip_existing: bool = False,
 ) -> Dict[str, any]:
@@ -541,6 +655,7 @@ def process_directory(
         top_buffer_m: Distance landward of top to include
         min_cliff_width_m: Minimum cliff width to process
         fallback_to_full: Use full transect when cliff not detected
+        reference_epoch: 'first' for temporal consistency, 'per_epoch' for legacy
         pattern: Glob pattern for raw NPZ files
         skip_existing: Skip files that already exist in output_dir
 
@@ -567,6 +682,7 @@ def process_directory(
         top_buffer_m=top_buffer_m,
         min_cliff_width_m=min_cliff_width_m,
         fallback_to_full=fallback_to_full,
+        reference_epoch=reference_epoch,
     )
 
     # Aggregate statistics

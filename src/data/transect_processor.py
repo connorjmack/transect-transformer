@@ -87,6 +87,11 @@ class TransectProcessor:
         top_buffer_m: Distance landward of top to include (default: 5.0)
         min_cliff_width_m: Minimum cliff width to process (default: 5.0)
         fallback_to_full: If True, use full transect when cliff not detected (default: True)
+        reference_epoch: How to determine the reference window for each transect.
+            - 'first': Use the first epoch with valid cliff detection as reference
+                       for ALL epochs (ensures temporal consistency)
+            - 'per_epoch': Use each epoch's own cliff detection (legacy behavior)
+            Default is 'first' for temporal consistency.
 
     Example:
         >>> processor = TransectProcessor(n_output_points=128, toe_buffer_m=10.0, top_buffer_m=5.0)
@@ -103,16 +108,22 @@ class TransectProcessor:
         top_buffer_m: float = 5.0,
         min_cliff_width_m: float = 5.0,
         fallback_to_full: bool = True,
+        reference_epoch: str = 'first',
     ):
+        if reference_epoch not in ('first', 'per_epoch'):
+            raise ValueError(f"reference_epoch must be 'first' or 'per_epoch', got '{reference_epoch}'")
+
         self.n_output_points = n_output_points
         self.toe_buffer_m = toe_buffer_m
         self.top_buffer_m = top_buffer_m
         self.min_cliff_width_m = min_cliff_width_m
         self.fallback_to_full = fallback_to_full
+        self.reference_epoch = reference_epoch
 
         logger.debug(
             f"TransectProcessor initialized: {n_output_points} points, "
-            f"window=[toe-{toe_buffer_m}m, top+{top_buffer_m}m]"
+            f"window=[toe-{toe_buffer_m}m, top+{top_buffer_m}m], "
+            f"reference_epoch={reference_epoch}"
         )
 
     def process(

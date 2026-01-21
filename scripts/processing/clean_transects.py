@@ -195,23 +195,38 @@ Examples:
             logger.error(f"Input file not found: {args.input}")
             return 1
 
-        # Find cliff delineation file
+        # Find cliff delineation: check for embedded data first, then sidecar file
         cliff_path = args.cliff
-        if cliff_path is None:
-            # Try common naming conventions
-            cliff_path = args.input.with_suffix('.cliff.npz')
-            if not cliff_path.exists():
-                cliff_path = args.input.parent / f"{args.input.stem}.cliff.npz"
+        has_embedded_cliff = False
 
-        if not cliff_path.exists():
-            logger.error(
-                f"Cliff delineation file not found. "
-                f"Run detect_cliffs.py first or specify --cliff"
-            )
-            return 1
+        if cliff_path is None:
+            # Check if input file has embedded cliff data
+            import numpy as np
+            try:
+                with np.load(args.input, allow_pickle=True) as data:
+                    has_embedded_cliff = 'toe_distances' in data
+            except Exception:
+                pass
+
+            if not has_embedded_cliff:
+                # Try common naming conventions for sidecar file
+                cliff_path = args.input.with_suffix('.cliff.npz')
+                if not cliff_path.exists():
+                    cliff_path = args.input.parent / f"{args.input.stem}.cliff.npz"
+
+                if not cliff_path.exists():
+                    logger.error(
+                        f"Cliff delineation file not found. "
+                        f"Run detect_cliffs.py first or specify --cliff"
+                    )
+                    return 1
 
         print(f"Input: {args.input}")
-        print(f"Cliff: {cliff_path}")
+        if has_embedded_cliff:
+            print(f"Cliff: embedded in input file")
+            cliff_path = None  # Processor will use embedded data
+        else:
+            print(f"Cliff: {cliff_path}")
         print(f"Output: {args.output}")
         print()
 

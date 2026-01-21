@@ -17,9 +17,11 @@ When providing Python or shell commands for the user to copy and paste, **always
 
 ## Project Overview
 
-**CliffCast** is a transformer-based deep learning model for predicting coastal cliff erosion risk. The model processes multi-temporal 1D transect data from LiDAR scans along with environmental forcing data (wave conditions and precipitation) to predict: risk index, collapse probability, event volume, and event classification.
+**CliffCast** is a transformer-based deep learning model that classifies coastal cliff erosion susceptibility. The model processes multi-temporal 1D transect data from LiDAR scans along with environmental forcing data (wave conditions and precipitation) to classify transects into 5 erosion mode classes: stable, beach erosion, cliff toe erosion, small rockfall, and large upper cliff failure.
 
-**Core Architecture**: Spatio-temporal attention over cliff geometry sequences, cross-attention fusion with environmental embeddings, and multi-task prediction heads.
+**Core Philosophy**: Nowcast susceptibility, not event forecasting. The model answers "What erosion mode is this transect susceptible to?" rather than predicting when specific events will occur.
+
+**Core Architecture**: Spatio-temporal attention over cliff geometry sequences, cross-attention fusion with environmental embeddings, and 5-class susceptibility classification head with derived risk scores.
 
 ## Project History & Reference Docs
 
@@ -68,23 +70,23 @@ ruff check src/
 
 ### Training
 ```bash
-# Phase 1: Risk index only
-python train.py --config configs/phase1_risk_only.yaml --data_dir data/processed/
+# Prepare training data with water year splits
+python scripts/processing/prepare_susceptibility_data.py --cube data/processed/unified_cube.npz --labels data/labels/erosion_mode_labels.csv --cdip-dir data/raw/cdip/ --atmos-dir data/processed/atmospheric/ --output-dir data/processed/
 
-# Phase 2: Risk + Retreat
-python train.py --config configs/phase2_add_retreat.yaml --data_dir data/processed/
+# Validate data before training
+python scripts/processing/validate_susceptibility_data.py --data-dir data/processed/
 
-# Phase 3: Risk + Retreat + Collapse
-python train.py --config configs/phase3_add_collapse.yaml --data_dir data/processed/
-
-# Phase 4: All heads (full model)
-python train.py --config configs/phase4_full.yaml --data_dir data/processed/ --wandb_project cliffcast
+# Train susceptibility classifier
+python scripts/train_susceptibility.py --config configs/susceptibility_v1.yaml --wandb-project cliffcast
 ```
 
 ### Evaluation
 ```bash
-# Evaluate on test set (TODO: not yet implemented)
-python evaluate.py --checkpoint checkpoints/best.pt --data_dir data/processed/ --split test --output results/
+# Evaluate susceptibility model on test set
+python scripts/evaluate_susceptibility.py --checkpoint checkpoints/best.pt --data data/processed/susceptibility_test.npz --output results/
+
+# Generate risk map from latest survey
+python scripts/generate_risk_map.py --checkpoint checkpoints/best.pt --cube data/processed/latest_survey.npz --output results/risk_map.csv
 ```
 
 ### Data Preprocessing
@@ -111,6 +113,12 @@ python scripts/processing/detect_cliff_edges.py --input data/processed/delmar.np
 ```bash
 # Launch transect viewer
 streamlit run apps/transect_viewer/app.py
+
+# Launch labeling interface (for creating erosion mode labels)
+streamlit run apps/labeling/app.py
+
+# Launch risk map viewer (for deployment)
+streamlit run apps/risk_map_viewer/app.py
 ```
 
 ### Visualization Scripts
@@ -130,8 +138,8 @@ python scripts/visualization/plot_prism_coverage.py --atmos-dir data/processed/a
 - `SpatioTemporalTransectEncoder` - Hierarchical attention for cliff geometry
 - `WaveEncoder` / `AtmosphericEncoder` - Environmental time series
 - `CrossAttentionFusion` - Fuses cliff with environment
-- `PredictionHeads` - Multi-task outputs (volume, event class, risk, collapse)
-- `CliffCast` - Full model assembly
+- `SusceptibilityHead` - 5-class classification (stable, beach, toe, rockfall, large failure)
+- `CliffCast` - Full model assembly with derived risk scores
 
 **Data Components**:
 - `ShapefileTransectExtractor` - LiDAR transect extraction
@@ -164,6 +172,28 @@ python scripts/visualization/plot_prism_coverage.py --atmos-dir data/processed/a
 
 **IMPORTANT**: These MOP ranges are canonical. Use them for filtering, subsetting, and the `--beach` flag.
 
+## Erosion Mode Classes
+
+| Class | Name | Physical Process | Risk Weight |
+|-------|------|------------------|-------------|
+| 0 | Stable | No significant change | 0.0 |
+| 1 | Beach erosion | Sediment transport, tidal processes | 0.1 |
+| 2 | Cliff toe erosion | Wave undercutting at cliff base | 0.4 |
+| 3 | Small rockfall | Weathering-driven small failures | 0.6 |
+| 4 | Large upper cliff failure | Major structural collapse | 1.0 |
+
+**Dominance hierarchy** (for labeling): Large failure > Small rockfall > Toe erosion > Beach erosion > Stable
+
+## Data Splits (Water Year Based)
+
+| Set | Water Years | Date Range | Purpose |
+|-----|-------------|------------|---------|
+| Train | WY2017-WY2023 | Oct 2016 - Sep 2023 | Learn susceptibility patterns |
+| Validation | WY2024 | Oct 2023 - Sep 2024 | Hyperparameter tuning, early stopping |
+| Test | WY2025 | Oct 2024 - Sep 2025 | Final held-out evaluation |
+
+**Note**: Water year N runs from October 1 of year N-1 to September 30 of year N.
+
 ## Data Processing Conventions
 
 - **Transect spacing**: 10m aligned with MOP lines (~1958 transects total)
@@ -180,7 +210,7 @@ python scripts/visualization/plot_prism_coverage.py --atmos-dir data/processed/a
 3. **Cube vs. Flat format**: Model expects `(B, T, N, 12)`, not `(B*T, N, 12)`
 4. **Concatenation order**: Environmental embeddings are `[wave, atmos]` not `[atmos, wave]`
 5. **CLS token**: Prepended to sequence, so output shape is `(B, T+1, d_model)`
-6. **Event class loss**: Use focal loss for class imbalance (most samples are stable)
+6. **Susceptibility loss**: Use weighted cross-entropy with class weights [0.3, 1.0, 2.0, 2.0, 5.0] and label smoothing (0.1)
 7. **Temporal alignment**: Environmental data aligned to most recent scan
 8. **Batch_first=True**: All transformers use this convention
 9. **Full temporal coverage**: Each transect in batch needs same T epochs (pad if needed)
@@ -191,4 +221,4 @@ python scripts/visualization/plot_prism_coverage.py --atmos-dir data/processed/a
 - **Synthetic first**: Validate on data with known relationships
 - **Visualize attention early**: Catch encoder bugs during training
 - **Use einops**: `rearrange(x, 'b n d -> b d n')` is clearer than `x.permute(0, 2, 1)`
-- **One head at a time**: Perfect risk index before adding other heads
+- **Risk from probs**: Risk score is derived from class probabilities: `risk = sum(probs * [0.0, 0.1, 0.4, 0.6, 1.0])`

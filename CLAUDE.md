@@ -23,13 +23,11 @@ When providing Python or shell commands for the user to copy and paste, **always
 
 **Core Architecture**: Spatio-temporal attention over cliff geometry sequences, cross-attention fusion with environmental embeddings, and 5-class susceptibility classification head with derived risk scores.
 
-## Project History & Reference Docs
+## Reference Docs
 
 When starting a new phase or needing detailed context, read these on-demand:
-- `docs/model_plan.md` - Target architecture spec
+- `docs/model_plan.md` - Target architecture spec, key decisions, lessons learned
 - `docs/plan.md` - Actionable implementation checklist
-- `docs/project-evolution.md` - Completed phases, key decisions, lessons learned
-- `docs/architecture-reference.md` - Detailed API docs, usage examples, data loaders
 - `docs/data_requirements.md` - Data schemas and validation rules
 
 ## Directory Structure
@@ -132,7 +130,7 @@ python scripts/visualization/plot_prism_coverage.py --atmos-dir data/processed/a
 
 ## Architecture Summary
 
-> **Full details**: See `docs/architecture-reference.md` for API docs and usage examples.
+> **Full details**: See `docs/model_plan.md` for complete architecture specification.
 
 **Model Components** (all implemented with 100% test coverage):
 - `SpatioTemporalTransectEncoder` - Hierarchical attention for cliff geometry

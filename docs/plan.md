@@ -1,7 +1,7 @@
 # CliffCast Implementation Plan
 
 > **Target Architecture**: See `docs/model_plan.md` for the full technical specification.
-> **Data Contracts**: See `docs/DATA_REQUIREMENTS.md` for schemas and validation rules.
+> **Data Contracts**: See `docs/data_requirements.md` for schemas and validation rules.
 
 This document is an actionable checklist to reach the susceptibility-based CliffCast classifier described in `model_plan.md`.
 
@@ -12,7 +12,7 @@ This document is an actionable checklist to reach the susceptibility-based Cliff
 | Resource | Purpose |
 |----------|---------|
 | `docs/model_plan.md` | Target architecture: 5-class susceptibility classification |
-| `docs/DATA_REQUIREMENTS.md` | Data schemas, validation rules, file formats |
+| `docs/data_requirements.md` | Data schemas, validation rules, file formats |
 | `CLAUDE.md` | Codebase overview, commands, conventions |
 
 ---

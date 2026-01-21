@@ -651,8 +651,43 @@ evaluation:
 
 ---
 
+## Appendix: Key Architectural Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| **Spatial encoding** | Distance from cliff toe | Physical distance matters for erosion patterns; sequential indices would lose this |
+| **Spatio-temporal hierarchy** | Spatial attention within timesteps, then temporal across | Cliff geometry at each scan is coherent; temporal evolution connects structures |
+| **Cube data format** | `(n_transects, T, N, 12)` | Enables efficient temporal batching and preserves relationships |
+| **10m transect spacing** | ~1,958 transects for training | Sufficient resolution while reducing computation; matches MOP monitoring points |
+| **Cross-attention direction** | Cliff queries environment | Learns "which conditions explain each cliff location's state" - more interpretable |
+| **Susceptibility framing** | Nowcast susceptibility, not forecast events | Sidesteps stochastic trigger prediction; matches manager needs |
+| **5-class erosion modes** | Physical process-based classes | Distinct management implications; dominance hierarchy for labeling |
+| **Asymmetric loss** | Low weight for stable (0.3), high for failure (5.0) | Stable is weak negative evidence; must not miss dangerous events |
+
+---
+
+## Appendix: Lessons Learned
+
+**Data Pipeline:**
+- LAZ files are 10-100x faster than LAS; use `--prefer-laz`
+- Unified cube mode handles partial-coverage surveys better than per-beach extraction
+- Coverage mask is essential for training with incomplete surveys
+
+**Model Development:**
+- Test small first: Debug with `d_model=32, n_layers=1` before full config
+- Synthetic data validation: Test on data with known relationships first
+- Attention visualization early: Catch encoder bugs during training
+
+**Environmental Data:**
+- CDIP fill values: -999.99 must be filtered to NaN
+- Circular mean for direction: Can't simple-average wave directions; use sin/cos
+- Temporal alignment: Environmental lookback is BEFORE scan date (no future leakage)
+
+---
+
 ## References
 
-- `archive/model_plan_v1.md`: Previous event-supervised approach
-- `docs/architecture-reference.md`: Component API documentation
+- `docs/archive/model_plan_v1.md`: Previous event-supervised approach
+- `docs/plan.md`: Implementation checklist
+- `docs/data_requirements.md`: Data schemas and validation rules
 - `CLAUDE.md`: Project overview and commands

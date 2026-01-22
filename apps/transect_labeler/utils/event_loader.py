@@ -11,10 +11,19 @@ Coordinate System:
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 import pandas as pd
+
+
+def _safe_date_slice(date_str: Any) -> Optional[str]:
+    """Safely slice date string to first 10 characters (YYYY-MM-DD)."""
+    if isinstance(date_str, str) and len(date_str) >= 10:
+        return date_str[:10]
+    elif isinstance(date_str, str):
+        return date_str
+    return None
 
 
 # MOP ranges for each beach (from CLAUDE.md)
@@ -255,8 +264,9 @@ def find_matching_epoch_pair(
     parsed_dates = []
     for d in epoch_dates:
         try:
-            if isinstance(d, str):
-                parsed_dates.append(pd.to_datetime(d[:10]))
+            date_part = _safe_date_slice(d)
+            if date_part:
+                parsed_dates.append(pd.to_datetime(date_part))
             else:
                 parsed_dates.append(pd.to_datetime(d))
         except Exception:
@@ -395,8 +405,13 @@ def get_events_for_transect_pair(
     if pair_idx >= len(epoch_dates) - 1:
         return []
 
-    epoch1_date = pd.to_datetime(epoch_dates[pair_idx][:10])
-    epoch2_date = pd.to_datetime(epoch_dates[pair_idx + 1][:10])
+    date1_str = _safe_date_slice(epoch_dates[pair_idx])
+    date2_str = _safe_date_slice(epoch_dates[pair_idx + 1])
+    if date1_str is None or date2_str is None:
+        return []
+
+    epoch1_date = pd.to_datetime(date1_str)
+    epoch2_date = pd.to_datetime(date2_str)
 
     result = []
     for _, event in matching.iterrows():

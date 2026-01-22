@@ -3,10 +3,21 @@
 Reuses and extends functionality from transect_viewer.
 """
 
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 import streamlit as st
+
+
+def _safe_date_label(dates: Optional[List[str]], idx: int, fallback_prefix: str = "Epoch") -> str:
+    """Safely get date label with bounds and type checking."""
+    if dates and idx < len(dates) and dates[idx]:
+        d = dates[idx]
+        if isinstance(d, str) and len(d) >= 10:
+            return d[:10]
+        elif isinstance(d, str):
+            return d
+    return f"{fallback_prefix} {idx}"
 
 
 @st.cache_data
@@ -157,8 +168,8 @@ def get_transect_pair(
         'transect_id': transect_ids[transect_idx] if transect_ids else transect_idx,
         'epoch1_idx': epoch1_idx,
         'epoch2_idx': epoch2_idx,
-        'epoch1_date': epoch_dates[epoch1_idx][:10] if epoch_dates else f"Epoch {epoch1_idx}",
-        'epoch2_date': epoch_dates[epoch2_idx][:10] if epoch_dates else f"Epoch {epoch2_idx}",
+        'epoch1_date': _safe_date_label(epoch_dates, epoch1_idx),
+        'epoch2_date': _safe_date_label(epoch_dates, epoch2_idx),
         'feature_names': feature_names,
     }
 

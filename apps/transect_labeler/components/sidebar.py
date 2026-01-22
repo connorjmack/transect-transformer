@@ -26,6 +26,17 @@ from apps.transect_labeler.utils.event_loader import (
 )
 
 
+def _safe_date_label(dates: list, idx: int, fallback_prefix: str = "E") -> str:
+    """Safely get date label with bounds and type checking."""
+    if dates and idx < len(dates) and dates[idx]:
+        d = dates[idx]
+        if isinstance(d, str) and len(d) >= 10:
+            return d[:10]
+        elif isinstance(d, str):
+            return d
+    return f"{fallback_prefix}{idx}"
+
+
 def render_sidebar():
     """Render the sidebar with file loading and navigation controls."""
     st.sidebar.title("Transect Labeler")
@@ -331,8 +342,8 @@ def _render_navigation_section():
     epoch_dates = get_epoch_dates(data)
     pair_options = []
     for i in range(n_pairs):
-        d1 = epoch_dates[i][:10] if epoch_dates else f"E{i}"
-        d2 = epoch_dates[i + 1][:10] if epoch_dates else f"E{i + 1}"
+        d1 = _safe_date_label(epoch_dates, i)
+        d2 = _safe_date_label(epoch_dates, i + 1)
         label_status = ""
         if st.session_state.labels is not None:
             label_val = st.session_state.labels[st.session_state.current_transect_idx, i]

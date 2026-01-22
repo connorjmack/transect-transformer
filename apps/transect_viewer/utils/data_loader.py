@@ -126,6 +126,7 @@ def get_transect_by_id(
         data: Full dataset in cube format
         transect_id: Transect ID to extract
         epoch_idx: Optional epoch index. If None, returns all epochs.
+                   Negative indices are supported (e.g., -1 for last epoch).
 
     Returns:
         Dictionary with transect data:
@@ -144,6 +145,15 @@ def get_transect_by_id(
     points = data['points']
     distances = data['distances']
     metadata = data['metadata']
+
+    # Validate epoch_idx bounds if provided
+    if epoch_idx is not None:
+        n_epochs = points.shape[1] if points.ndim == 4 else 1
+        # Handle negative indexing
+        if epoch_idx < 0:
+            epoch_idx = n_epochs + epoch_idx
+        if epoch_idx < 0 or epoch_idx >= n_epochs:
+            raise ValueError(f"epoch_idx {epoch_idx} out of bounds for {n_epochs} epochs")
 
     if epoch_idx is not None:
         # Single epoch

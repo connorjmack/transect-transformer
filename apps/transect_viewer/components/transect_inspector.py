@@ -47,24 +47,37 @@ def render_inspector():
     transect_ids = get_all_transect_ids(data)
     mop_ids = data.get('mop_ids', None)
 
+    # Get original (unsorted) transect_ids for proper alignment with mop_ids
+    original_transect_ids = data['transect_ids']
+    if isinstance(original_transect_ids, np.ndarray):
+        original_transect_ids = original_transect_ids.tolist()
+
     # Create display labels for dropdown
     if mop_ids is not None:
         if isinstance(mop_ids, np.ndarray):
             mop_ids = mop_ids.tolist()
         # Create unique MOP list for dropdown (deduplicated)
         unique_mops = sorted(set(mop_ids))
-        # Map each unique MOP to its first transect_id
+        # Map each unique MOP to its first transect_id (using original order for alignment)
         mop_to_transect = {}
-        for tid, mop in zip(transect_ids, mop_ids):
+        for tid, mop in zip(original_transect_ids, mop_ids):
             if mop not in mop_to_transect:
                 mop_to_transect[mop] = tid
 
         col1, col2 = st.columns([1, 2])
         with col1:
+            # Find current MOP for selected transect (use original order for alignment)
+            current_mop_idx = 0
+            if transect_id in original_transect_ids:
+                orig_idx = original_transect_ids.index(transect_id)
+                current_mop = mop_ids[orig_idx]
+                if current_mop in unique_mops:
+                    current_mop_idx = unique_mops.index(current_mop)
+
             selected_mop = st.selectbox(
                 "Select MOP",
                 unique_mops,
-                index=unique_mops.index(mop_ids[transect_ids.index(transect_id)]) if transect_id in transect_ids else 0,
+                index=current_mop_idx,
                 key="inspector_mop_select",
             )
             # Update transect_id based on selected MOP

@@ -190,16 +190,20 @@ def _render_view_options(view_mode: str):
         # Epoch selector (for cube format)
         if is_cube and dims['n_epochs'] > 1:
             epoch_dates = get_epoch_dates(data)
-            epoch_options = [
-                f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
-                for i in range(dims['n_epochs'])
-            ]
+
+            def _safe_epoch_label(i):
+                if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
+                    d = epoch_dates[i]
+                    return f"{i}: {d[:10]}" if isinstance(d, str) and len(d) >= 10 else f"{i}: {d}"
+                return f"Epoch {i}"
+
+            epoch_options = [_safe_epoch_label(i) for i in range(dims['n_epochs'])]
 
             selected_epoch = st.sidebar.selectbox(
                 "Epoch",
                 range(dims['n_epochs']),
                 index=st.session_state.selected_epoch_idx,
-                format_func=lambda x: epoch_options[x],
+                format_func=lambda x: epoch_options[x] if x < len(epoch_options) else f"Epoch {x}",
             )
             st.session_state.selected_epoch_idx = selected_epoch
 
@@ -250,16 +254,20 @@ def _render_view_options(view_mode: str):
         # Epoch selector for cross-transect view
         if is_cube and dims['n_epochs'] > 1:
             epoch_dates = get_epoch_dates(data)
-            epoch_options = [
-                f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
-                for i in range(dims['n_epochs'])
-            ]
+
+            def _safe_cross_epoch_label(i):
+                if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
+                    d = epoch_dates[i]
+                    return f"{i}: {d[:10]}" if isinstance(d, str) and len(d) >= 10 else f"{i}: {d}"
+                return f"Epoch {i}"
+
+            epoch_options = [_safe_cross_epoch_label(i) for i in range(dims['n_epochs'])]
 
             selected_epoch = st.sidebar.selectbox(
                 "Epoch to Display",
                 range(dims['n_epochs']),
                 index=st.session_state.selected_epoch_idx,
-                format_func=lambda x: epoch_options[x],
+                format_func=lambda x: epoch_options[x] if x < len(epoch_options) else f"Epoch {x}",
                 key="cross_transect_epoch",
             )
             st.session_state.selected_epoch_idx = selected_epoch

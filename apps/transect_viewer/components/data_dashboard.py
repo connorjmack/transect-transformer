@@ -95,8 +95,10 @@ def _render_overview_metrics(data: dict):
             st.metric("Temporal Epochs", dims['n_epochs'])
 
         with col5:
-            if epoch_dates:
-                date_range = f"{epoch_dates[0][:10]} to {epoch_dates[-1][:10]}"
+            if epoch_dates and len(epoch_dates) > 0:
+                first_date = epoch_dates[0][:10] if len(epoch_dates[0]) >= 10 else epoch_dates[0]
+                last_date = epoch_dates[-1][:10] if len(epoch_dates[-1]) >= 10 else epoch_dates[-1]
+                date_range = f"{first_date} to {last_date}"
             else:
                 date_range = "N/A"
             st.metric("Date Range", date_range)
@@ -145,10 +147,14 @@ def _render_spatiotemporal_coverage_map(data: dict):
         mop_ids = mop_ids.tolist()
 
     # Create epoch labels (x-axis)
-    epoch_labels = [
-        d[:10] if epoch_dates and d else f"E{i}"
-        for i, d in enumerate(epoch_dates if epoch_dates else [None] * dims['n_epochs'])
-    ]
+    def _safe_date_label(i, d):
+        if d is not None and isinstance(d, str) and len(d) >= 10:
+            return d[:10]
+        elif d is not None and isinstance(d, str):
+            return d
+        return f"E{i}"
+
+    epoch_labels = [_safe_date_label(i, d) for i, d in enumerate(epoch_dates)] if epoch_dates else [f"E{i}" for i in range(dims['n_epochs'])]
 
     # Get beach slices if available
     beach_slices = data.get('beach_slices', None)
@@ -271,10 +277,13 @@ def _render_feature_distributions(data: dict):
     epoch_idx = st.session_state.get('selected_epoch_idx', dims['n_epochs'] - 1)
     if is_cube and dims['n_epochs'] > 1:
         epoch_dates = get_epoch_dates(data)
-        epoch_options = [
-            f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
-            for i in range(dims['n_epochs'])
-        ]
+        epoch_options = []
+        for i in range(dims['n_epochs']):
+            if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
+                date_str = epoch_dates[i][:10] if len(epoch_dates[i]) >= 10 else epoch_dates[i]
+                epoch_options.append(f"{i}: {date_str}")
+            else:
+                epoch_options.append(f"Epoch {i}")
         epoch_options.append("All epochs combined")
 
         selected = st.selectbox(
@@ -373,10 +382,13 @@ def _render_metadata_distributions(data: dict):
     epoch_idx = st.session_state.get('selected_epoch_idx', dims['n_epochs'] - 1)
     if is_cube and dims['n_epochs'] > 1:
         epoch_dates = get_epoch_dates(data)
-        epoch_options = [
-            f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
-            for i in range(dims['n_epochs'])
-        ]
+        epoch_options = []
+        for i in range(dims['n_epochs']):
+            if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
+                date_str = epoch_dates[i][:10] if len(epoch_dates[i]) >= 10 else epoch_dates[i]
+                epoch_options.append(f"{i}: {date_str}")
+            else:
+                epoch_options.append(f"Epoch {i}")
 
         epoch_idx = st.selectbox(
             "Show metadata for epoch:",
@@ -519,10 +531,13 @@ def _render_statistics_tables(data: dict):
     epoch_idx = -1  # Default to latest
     if is_cube and dims['n_epochs'] > 1:
         epoch_dates = get_epoch_dates(data)
-        epoch_options = [
-            f"{i}: {epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
-            for i in range(dims['n_epochs'])
-        ]
+        epoch_options = []
+        for i in range(dims['n_epochs']):
+            if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
+                date_str = epoch_dates[i][:10] if len(epoch_dates[i]) >= 10 else epoch_dates[i]
+                epoch_options.append(f"{i}: {date_str}")
+            else:
+                epoch_options.append(f"Epoch {i}")
 
         epoch_idx = st.selectbox(
             "Compute statistics for epoch:",
@@ -599,7 +614,14 @@ def _render_temporal_coverage(data: dict):
     coverage_matrix = coverage['coverage_matrix']
 
     # Create heatmap
-    epoch_labels = [d[:10] if epoch_dates else f"E{i}" for i, d in enumerate(epoch_dates)] if epoch_dates else [f"E{i}" for i in range(dims['n_epochs'])]
+    def _safe_epoch_label(i, d):
+        if d is not None and isinstance(d, str) and len(d) >= 10:
+            return d[:10]
+        elif d is not None and isinstance(d, str):
+            return d
+        return f"E{i}"
+
+    epoch_labels = [_safe_epoch_label(i, d) for i, d in enumerate(epoch_dates)] if epoch_dates else [f"E{i}" for i in range(dims['n_epochs'])]
     transect_ids = data['transect_ids']
     if isinstance(transect_ids, np.ndarray):
         transect_ids = transect_ids.tolist()

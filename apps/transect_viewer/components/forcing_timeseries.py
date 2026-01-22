@@ -210,19 +210,32 @@ def _select_epoch(epoch_dates: List[str]) -> Tuple[int, Optional[pd.Timestamp], 
         return 0, None, "Epoch 0"
 
     options = list(range(len(epoch_dates)))
-    labels = [
-        f"{idx}: {epoch_dates[idx][:10]}" if epoch_dates else f"Epoch {idx}"
-        for idx in options
-    ]
+
+    # Build labels with safe string slicing
+    def _safe_label(idx):
+        if idx < len(epoch_dates) and epoch_dates[idx]:
+            date_str = epoch_dates[idx]
+            date_part = date_str[:10] if isinstance(date_str, str) and len(date_str) >= 10 else str(date_str)
+            return f"{idx}: {date_part}"
+        return f"Epoch {idx}"
+
+    labels = [_safe_label(idx) for idx in options]
+
     default_epoch = st.session_state.get('forcing_epoch_idx', options[-1])
     if default_epoch not in options:
         default_epoch = options[-1]
+
+    # Safe format_func that handles edge cases
+    def _format_epoch(idx):
+        if 0 <= idx < len(labels):
+            return labels[idx]
+        return f"Epoch {idx}"
 
     selected_epoch = st.select_slider(
         "LiDAR epoch",
         options=options,
         value=default_epoch,
-        format_func=lambda idx: labels[idx],
+        format_func=_format_epoch,
         key="forcing_epoch_slider",
     )
     st.session_state.forcing_epoch_idx = selected_epoch
@@ -233,7 +246,8 @@ def _select_epoch(epoch_dates: List[str]) -> Tuple[int, Optional[pd.Timestamp], 
     except Exception:
         ts = None
 
-    return selected_epoch, ts, labels[selected_epoch]
+    label = _format_epoch(selected_epoch)
+    return selected_epoch, ts, label
 
 
 def _render_wave_section(

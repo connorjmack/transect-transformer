@@ -34,8 +34,10 @@ def render_cross_transect():
     st.header("Cross-Transect View")
 
     # Show which epoch is being displayed
-    if is_cube and epoch_dates:
-        st.info(f"Showing data for epoch: {epoch_dates[epoch_idx][:10]}")
+    if is_cube and epoch_dates and epoch_idx < len(epoch_dates):
+        date_str = epoch_dates[epoch_idx]
+        date_label = date_str[:10] if isinstance(date_str, str) and len(date_str) >= 10 else str(date_str)
+        st.info(f"Showing data for epoch: {date_label}")
     elif is_cube:
         st.info(f"Showing data for epoch {epoch_idx}")
 
@@ -81,15 +83,17 @@ def _render_location_map(data: dict, epoch_idx: int, is_cube: bool):
     else:
         epoch_metadata = metadata
 
-    # Create dataframe for plotting
-    df = pd.DataFrame({
+    # Create dataframe for plotting with bounds checking
+    n_cols = epoch_metadata.shape[1] if epoch_metadata.ndim >= 2 else 0
+    df_data = {
         'transect_id': transect_ids,
-        'x': epoch_metadata[:, lon_idx],
-        'y': epoch_metadata[:, lat_idx],
-        'color_value': epoch_metadata[:, color_idx],
-        'cliff_height': epoch_metadata[:, 0],
-        'mean_slope': epoch_metadata[:, 1],
-    })
+        'x': epoch_metadata[:, lon_idx] if lon_idx < n_cols else np.zeros(len(transect_ids)),
+        'y': epoch_metadata[:, lat_idx] if lat_idx < n_cols else np.zeros(len(transect_ids)),
+        'color_value': epoch_metadata[:, color_idx] if color_idx < n_cols else np.zeros(len(transect_ids)),
+        'cliff_height': epoch_metadata[:, 0] if 0 < n_cols else np.zeros(len(transect_ids)),
+        'mean_slope': epoch_metadata[:, 1] if 1 < n_cols else np.zeros(len(transect_ids)),
+    }
+    df = pd.DataFrame(df_data)
 
     # Check if coordinates are UTM (large values)
     is_utm = df['x'].max() > 180 or df['y'].max() > 90
@@ -149,10 +153,16 @@ def _render_location_map(data: dict, epoch_idx: int, is_cube: bool):
     col1, col2 = st.columns([3, 1])
 
     with col1:
+        # Safely compute default selections
+        if st.session_state.selected_transects:
+            default_selections = [t for t in st.session_state.selected_transects[:5] if t in transect_ids]
+        else:
+            default_selections = transect_ids[:min(3, len(transect_ids))]
+
         selected_ids = st.multiselect(
             "Transect IDs",
             transect_ids,
-            default=st.session_state.selected_transects[:5] if st.session_state.selected_transects else transect_ids[:3],
+            default=default_selections,
             max_selections=10,
         )
         st.session_state.selected_transects = selected_ids
@@ -212,8 +222,12 @@ def _render_multi_transect_comparison(data: dict, epoch_idx: int, is_cube: bool)
             if cliff_pos is not None:
                 toe_idx = cliff_pos.get('toe_idx')
                 top_idx = cliff_pos.get('top_idx')
-                if toe_idx is not None and top_idx is not None:
-                    points = transect['points']
+                points = transect['points']
+                n_points = points.shape[0] if points.ndim >= 1 else 0
+                # Validate indices are within bounds
+                if (toe_idx is not None and top_idx is not None and
+                    0 <= toe_idx < n_points and 0 <= top_idx < n_points and
+                    feature_idx < points.shape[1] if points.ndim >= 2 else False):
                     # Toe marker
                     fig.add_trace(go.Scatter(
                         x=[cliff_pos['toe_distance']],
@@ -261,14 +275,21 @@ def _render_multi_transect_comparison(data: dict, epoch_idx: int, is_cube: bool)
     for tid in selected_ids:
         transect = get_transect_by_id(data, tid, epoch_idx=epoch_idx)
         metadata = transect['metadata']
+        n_meta = len(metadata) if hasattr(metadata, '__len__') else 0
+
+        # Safe access to metadata fields with bounds checking
+        def safe_meta(idx, fmt=".2f"):
+            if idx < n_meta and not np.isnan(metadata[idx]):
+                return f"{metadata[idx]:{fmt}}"
+            return "N/A"
 
         summary_data.append({
             'ID': tid,
-            'Cliff Height (m)': f"{metadata[0]:.2f}",
-            'Mean Slope (deg)': f"{metadata[1]:.1f}",
-            'Max Slope (deg)': f"{metadata[2]:.1f}",
-            'Length (m)': f"{metadata[6]:.1f}",
-            'Orientation (deg)': f"{metadata[5]:.1f}",
+            'Cliff Height (m)': safe_meta(0, ".2f"),
+            'Mean Slope (deg)': safe_meta(1, ".1f"),
+            'Max Slope (deg)': safe_meta(2, ".1f"),
+            'Length (m)': safe_meta(6, ".1f"),
+            'Orientation (deg)': safe_meta(5, ".1f"),
         })
 
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)

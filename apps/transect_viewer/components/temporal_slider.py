@@ -17,6 +17,17 @@ from apps.transect_viewer.utils.data_loader import (
 )
 
 
+def _safe_date_label(epoch_dates: list, idx: int, fallback_prefix: str = "Epoch") -> str:
+    """Safely get date label with bounds and type checking."""
+    if epoch_dates and idx < len(epoch_dates) and epoch_dates[idx]:
+        d = epoch_dates[idx]
+        if isinstance(d, str) and len(d) >= 10:
+            return d[:10]
+        elif isinstance(d, str):
+            return d
+    return f"{fallback_prefix} {idx}"
+
+
 def _get_valid_epochs_for_transect(data: dict, transect_id: int) -> list:
     """
     Get list of epoch indices that have valid data for a given transect.
@@ -106,11 +117,8 @@ def render_temporal_slider():
         slider_position = 0
         actual_epoch_idx = valid_epochs[0]
     else:
-        # Create labels only for valid epochs
-        valid_epoch_labels = [
-            f"{epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
-            for i in valid_epochs
-        ]
+        # Create labels only for valid epochs with safe date slicing
+        valid_epoch_labels = [_safe_date_label(epoch_dates, i) for i in valid_epochs]
 
         # Get previous slider position, clamped to valid range
         prev_position = st.session_state.get('slider_epoch_idx', 0)
@@ -127,11 +135,8 @@ def render_temporal_slider():
         st.session_state.slider_epoch_idx = slider_position
         actual_epoch_idx = valid_epochs[slider_position]
 
-    # Epoch labels for display
-    epoch_labels = [
-        f"{epoch_dates[i][:10]}" if epoch_dates else f"Epoch {i}"
-        for i in range(dims['n_epochs'])
-    ]
+    # Epoch labels for display with safe date slicing
+    epoch_labels = [_safe_date_label(epoch_dates, i) for i in range(dims['n_epochs'])]
 
     # Show current epoch info
     col1, col2, col3 = st.columns(3)
@@ -234,10 +239,20 @@ def _compute_days_between(epoch_dates: list, idx1: int, idx2: int) -> str:
     """Compute days between two epochs."""
     if not epoch_dates:
         return None
+    # Bounds check
+    if idx1 >= len(epoch_dates) or idx2 >= len(epoch_dates):
+        return None
     try:
         from datetime import datetime
-        d1 = datetime.fromisoformat(epoch_dates[idx1][:10])
-        d2 = datetime.fromisoformat(epoch_dates[idx2][:10])
+        date1_str = epoch_dates[idx1]
+        date2_str = epoch_dates[idx2]
+        # Safe string slicing
+        date1_part = date1_str[:10] if isinstance(date1_str, str) and len(date1_str) >= 10 else None
+        date2_part = date2_str[:10] if isinstance(date2_str, str) and len(date2_str) >= 10 else None
+        if date1_part is None or date2_part is None:
+            return None
+        d1 = datetime.fromisoformat(date1_part)
+        d2 = datetime.fromisoformat(date2_part)
         return str((d2 - d1).days)
     except Exception:
         return None
@@ -278,9 +293,11 @@ def _render_profile_plot(
         top_dist = cliff_pos['top_distance']
         toe_idx = cliff_pos.get('toe_idx')
         top_idx = cliff_pos.get('top_idx')
+        n_points = points.shape[0] if points.ndim >= 1 else 0
 
-        # Get elevations at toe/top
-        if toe_idx is not None and top_idx is not None:
+        # Get elevations at toe/top with bounds checking
+        if (toe_idx is not None and top_idx is not None and
+            0 <= toe_idx < n_points and 0 <= top_idx < n_points):
             toe_elev = points[toe_idx, feature_idx]
             top_elev = points[top_idx, feature_idx]
 
@@ -457,8 +474,8 @@ def _render_epoch_thumbnails_valid(
     else:
         horizontal_spacing = 0.05
 
-    # Create labels for valid epochs only
-    valid_labels = [epoch_labels[e] for e in valid_epochs]
+    # Create labels for valid epochs only with bounds checking
+    valid_labels = [epoch_labels[e] if e < len(epoch_labels) else f"Epoch {e}" for e in valid_epochs]
 
     fig = make_subplots(
         rows=n_rows,
@@ -530,14 +547,21 @@ def _render_epoch_metadata(transect: dict, epoch_label: str):
     st.subheader(f"Transect Metadata - {epoch_label}")
 
     metadata = transect['metadata']
+    n_meta = len(metadata) if hasattr(metadata, '__len__') else 0
+
+    # Safe metadata access with bounds checking
+    def safe_meta(idx, decimals=2, suffix=""):
+        if idx < n_meta:
+            return config.format_value(metadata[idx], decimals, suffix)
+        return "N/A"
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Cliff Height", config.format_value(metadata[0], 2, " m"))
+        st.metric("Cliff Height", safe_meta(0, 2, " m"))
     with col2:
-        st.metric("Mean Slope", config.format_value(metadata[1], 1, " deg"))
+        st.metric("Mean Slope", safe_meta(1, 1, " deg"))
     with col3:
-        st.metric("Max Slope", config.format_value(metadata[2], 1, " deg"))
+        st.metric("Max Slope", safe_meta(2, 1, " deg"))
     with col4:
-        st.metric("Length", config.format_value(metadata[6], 1, " m"))
+        st.metric("Length", safe_meta(6, 1, " m"))

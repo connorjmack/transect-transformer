@@ -18,17 +18,7 @@ from apps.transect_viewer.utils.data_loader import (
     get_cliff_positions_by_id,
 )
 from apps.transect_viewer.utils.validators import compute_temporal_statistics
-
-
-def _safe_date_label(dates: list, idx: int, fallback_prefix: str = "Epoch") -> str:
-    """Safely get date label with bounds and type checking."""
-    if dates and idx < len(dates) and dates[idx]:
-        d = dates[idx]
-        if isinstance(d, str) and len(d) >= 10:
-            return d[:10]
-        elif isinstance(d, str):
-            return d
-    return f"{fallback_prefix} {idx}"
+from apps.transect_viewer.utils.helpers import safe_date_label
 
 
 def render_evolution():
@@ -133,7 +123,7 @@ def _render_temporal_comparison(
     valid_epochs = []
 
     for t in range(n_epochs):
-        epoch_label = _safe_date_label(dates, t)
+        epoch_label = safe_date_label(dates, t)
         color = config.EPOCH_COLORS[t % len(config.EPOCH_COLORS)]
 
         # Skip if all NaN for this epoch
@@ -164,7 +154,7 @@ def _render_temporal_comparison(
             # Validate indices are within bounds
             if (toe_idx is not None and top_idx is not None and
                 0 <= toe_idx < n_points and 0 <= top_idx < n_points):
-                first_label = _safe_date_label(dates, first_epoch, "E")
+                first_label = safe_date_label(dates, first_epoch, "E")
                 color_first = config.EPOCH_COLORS[first_epoch % len(config.EPOCH_COLORS)]
 
                 # Toe marker (first epoch)
@@ -197,7 +187,7 @@ def _render_temporal_comparison(
                 # Validate indices are within bounds
                 if (toe_idx is not None and top_idx is not None and
                     0 <= toe_idx < n_points and 0 <= top_idx < n_points):
-                    last_label = _safe_date_label(dates, last_epoch, "E")
+                    last_label = safe_date_label(dates, last_epoch, "E")
                     color_last = config.EPOCH_COLORS[last_epoch % len(config.EPOCH_COLORS)]
 
                     # Toe marker (last epoch)
@@ -253,7 +243,7 @@ def _render_change_detection(
     # Epoch selection for comparison
     col1, col2 = st.columns(2)
 
-    epoch_options = [_safe_date_label(epoch_dates, i, "Epoch") for i in range(dims['n_epochs'])]
+    epoch_options = [safe_date_label(epoch_dates, i, "Epoch") for i in range(dims['n_epochs'])]
     epoch_options = [f"{i}: {label}" for i, label in enumerate(epoch_options)]
 
     with col1:
@@ -407,7 +397,7 @@ def _render_temporal_heatmap(
             )
 
     # Epoch labels
-    epoch_labels = [_safe_date_label(dates, i, "E") for i in range(n_epochs)]
+    epoch_labels = [safe_date_label(dates, i, "E") for i in range(n_epochs)]
 
     # Create heatmap with actual distance values on x-axis
     fig = go.Figure(data=go.Heatmap(

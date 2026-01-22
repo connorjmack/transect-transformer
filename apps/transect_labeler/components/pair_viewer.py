@@ -9,7 +9,6 @@ from apps.transect_labeler.utils.data_loader import (
     get_transect_pair,
     compute_pair_change,
     get_transect_ids,
-    get_feature_names,
     has_cliff_data,
     get_cliff_positions,
 )
@@ -41,31 +40,35 @@ def render_pair_viewer():
         cliff_pos_epoch1 = get_cliff_positions(data, transect_idx, pair_idx)
         cliff_pos_epoch2 = get_cliff_positions(data, transect_idx, pair_idx + 1)
 
-    # Header with current position info
-    st.subheader(f"Transect {transect_id}: {pair_data['epoch1_date']} -> {pair_data['epoch2_date']}")
-
-    # Create comparison plot with cliff markers
-    fig = _create_comparison_plot(pair_data, cliff_pos_epoch1, cliff_pos_epoch2)
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Difference plot below
-    fig_diff = _create_difference_plot(pair_data, cliff_pos_epoch1, cliff_pos_epoch2)
-    st.plotly_chart(fig_diff, use_container_width=True)
-
-    # Summary statistics
-    _render_change_summary(pair_data)
-
-
-def _create_comparison_plot(pair_data: dict, cliff_pos_epoch1: dict | None, cliff_pos_epoch2: dict | None) -> go.Figure:
-    """Create overlaid profile plot comparing two epochs with cliff markers."""
+    # Get feature index for plots (compute once)
     feature_name = st.session_state.selected_feature
     feature_names = pair_data.get('feature_names', [])
-
-    # Find feature index
     if feature_name in feature_names:
         feature_idx = feature_names.index(feature_name)
     else:
         feature_idx = 1  # Default to elevation
+
+    # Compute change data once (used by both difference plot and summary)
+    change_data = compute_pair_change(pair_data, feature_idx)
+
+    # Header with current position info
+    st.subheader(f"Transect {transect_id}: {pair_data['epoch1_date']} -> {pair_data['epoch2_date']}")
+
+    # Create comparison plot with cliff markers
+    fig = _create_comparison_plot(pair_data, cliff_pos_epoch1, cliff_pos_epoch2, feature_idx)
+    st.plotly_chart(fig, use_container_width=True, key=f"comparison_plot_{transect_idx}_{pair_idx}")
+
+    # Difference plot below
+    fig_diff = _create_difference_plot(pair_data, cliff_pos_epoch1, cliff_pos_epoch2, change_data)
+    st.plotly_chart(fig_diff, use_container_width=True, key=f"diff_plot_{transect_idx}_{pair_idx}")
+
+    # Summary statistics
+    _render_change_summary(change_data)
+
+
+def _create_comparison_plot(pair_data: dict, cliff_pos_epoch1: dict | None, cliff_pos_epoch2: dict | None, feature_idx: int) -> go.Figure:
+    """Create overlaid profile plot comparing two epochs with cliff markers."""
+    feature_name = st.session_state.selected_feature
 
     fig = go.Figure()
 
@@ -152,19 +155,10 @@ def _create_comparison_plot(pair_data: dict, cliff_pos_epoch1: dict | None, clif
     return fig
 
 
-def _create_difference_plot(pair_data: dict, cliff_pos_epoch1: dict | None, cliff_pos_epoch2: dict | None) -> go.Figure:
+def _create_difference_plot(pair_data: dict, cliff_pos_epoch1: dict | None, cliff_pos_epoch2: dict | None, change_data: dict) -> go.Figure:
     """Create difference plot (epoch2 - epoch1) with cliff position indicators."""
     feature_name = st.session_state.selected_feature
-    feature_names = pair_data.get('feature_names', [])
 
-    # Find feature index
-    if feature_name in feature_names:
-        feature_idx = feature_names.index(feature_name)
-    else:
-        feature_idx = 1  # Default to elevation
-
-    # Compute change
-    change_data = compute_pair_change(pair_data, feature_idx)
     distances = change_data['distances']
     difference = change_data['difference']
 
@@ -252,19 +246,8 @@ def _create_difference_plot(pair_data: dict, cliff_pos_epoch1: dict | None, clif
     return fig
 
 
-def _render_change_summary(pair_data: dict):
+def _render_change_summary(change_data: dict):
     """Render summary statistics for the change."""
-    feature_name = st.session_state.selected_feature
-    feature_names = pair_data.get('feature_names', [])
-
-    # Find feature index
-    if feature_name in feature_names:
-        feature_idx = feature_names.index(feature_name)
-    else:
-        feature_idx = 1
-
-    change_data = compute_pair_change(pair_data, feature_idx)
-
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Mean Change", f"{change_data['mean_change']:.3f}")

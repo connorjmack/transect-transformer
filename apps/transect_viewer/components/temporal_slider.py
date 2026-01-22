@@ -15,17 +15,7 @@ from apps.transect_viewer.utils.data_loader import (
     has_cliff_data,
     get_cliff_positions_by_id,
 )
-
-
-def _safe_date_label(epoch_dates: list, idx: int, fallback_prefix: str = "Epoch") -> str:
-    """Safely get date label with bounds and type checking."""
-    if epoch_dates and idx < len(epoch_dates) and epoch_dates[idx]:
-        d = epoch_dates[idx]
-        if isinstance(d, str) and len(d) >= 10:
-            return d[:10]
-        elif isinstance(d, str):
-            return d
-    return f"{fallback_prefix} {idx}"
+from apps.transect_viewer.utils.helpers import safe_date_label, safe_metadata_value
 
 
 def _get_valid_epochs_for_transect(data: dict, transect_id: int) -> list:
@@ -118,7 +108,7 @@ def render_temporal_slider():
         actual_epoch_idx = valid_epochs[0]
     else:
         # Create labels only for valid epochs with safe date slicing
-        valid_epoch_labels = [_safe_date_label(epoch_dates, i) for i in valid_epochs]
+        valid_epoch_labels = [safe_date_label(epoch_dates, i) for i in valid_epochs]
 
         # Get previous slider position, clamped to valid range
         prev_position = st.session_state.get('slider_epoch_idx', 0)
@@ -136,7 +126,7 @@ def render_temporal_slider():
         actual_epoch_idx = valid_epochs[slider_position]
 
     # Epoch labels for display with safe date slicing
-    epoch_labels = [_safe_date_label(epoch_dates, i) for i in range(dims['n_epochs'])]
+    epoch_labels = [safe_date_label(epoch_dates, i) for i in range(dims['n_epochs'])]
 
     # Show current epoch info
     col1, col2, col3 = st.columns(3)
@@ -547,21 +537,14 @@ def _render_epoch_metadata(transect: dict, epoch_label: str):
     st.subheader(f"Transect Metadata - {epoch_label}")
 
     metadata = transect['metadata']
-    n_meta = len(metadata) if hasattr(metadata, '__len__') else 0
-
-    # Safe metadata access with bounds checking
-    def safe_meta(idx, decimals=2, suffix=""):
-        if idx < n_meta:
-            return config.format_value(metadata[idx], decimals, suffix)
-        return "N/A"
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Cliff Height", safe_meta(0, 2, " m"))
+        st.metric("Cliff Height", safe_metadata_value(metadata, 0, 2, " m"))
     with col2:
-        st.metric("Mean Slope", safe_meta(1, 1, " deg"))
+        st.metric("Mean Slope", safe_metadata_value(metadata, 1, 1, " deg"))
     with col3:
-        st.metric("Max Slope", safe_meta(2, 1, " deg"))
+        st.metric("Max Slope", safe_metadata_value(metadata, 2, 1, " deg"))
     with col4:
-        st.metric("Length", safe_meta(6, 1, " m"))
+        st.metric("Length", safe_metadata_value(metadata, 6, 1, " m"))

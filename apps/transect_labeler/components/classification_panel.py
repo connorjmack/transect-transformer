@@ -50,6 +50,7 @@ def render_classification_panel():
     # Clear label button
     if st.button(
         "Clear Label",
+        key="clear_label_btn",
         use_container_width=True,
         disabled=current_label == config.UNLABELED_VALUE
     ):
@@ -64,12 +65,13 @@ def render_classification_panel():
     with col1:
         if st.button(
             "Label & Next",
+            key="label_next_btn",
             use_container_width=True,
             disabled=current_label == config.UNLABELED_VALUE
         ):
             _advance_to_next()
     with col2:
-        if st.button("Skip", use_container_width=True):
+        if st.button("Skip", key="skip_btn", use_container_width=True):
             _advance_to_next()
 
 

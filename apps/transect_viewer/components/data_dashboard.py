@@ -21,6 +21,7 @@ from apps.transect_viewer.utils.data_loader import (
     is_cube_format,
     check_data_coverage,
 )
+from apps.transect_viewer.utils.helpers import safe_date_label, safe_epoch_option
 
 
 def render_dashboard():
@@ -147,14 +148,7 @@ def _render_spatiotemporal_coverage_map(data: dict):
         mop_ids = mop_ids.tolist()
 
     # Create epoch labels (x-axis)
-    def _safe_date_label(i, d):
-        if d is not None and isinstance(d, str) and len(d) >= 10:
-            return d[:10]
-        elif d is not None and isinstance(d, str):
-            return d
-        return f"E{i}"
-
-    epoch_labels = [_safe_date_label(i, d) for i, d in enumerate(epoch_dates)] if epoch_dates else [f"E{i}" for i in range(dims['n_epochs'])]
+    epoch_labels = [safe_date_label(epoch_dates, i, "E") for i in range(dims['n_epochs'])]
 
     # Get beach slices if available
     beach_slices = data.get('beach_slices', None)
@@ -277,20 +271,14 @@ def _render_feature_distributions(data: dict):
     epoch_idx = st.session_state.get('selected_epoch_idx', dims['n_epochs'] - 1)
     if is_cube and dims['n_epochs'] > 1:
         epoch_dates = get_epoch_dates(data)
-        epoch_options = []
-        for i in range(dims['n_epochs']):
-            if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
-                date_str = epoch_dates[i][:10] if len(epoch_dates[i]) >= 10 else epoch_dates[i]
-                epoch_options.append(f"{i}: {date_str}")
-            else:
-                epoch_options.append(f"Epoch {i}")
+        epoch_options = [safe_epoch_option(epoch_dates, i) for i in range(dims['n_epochs'])]
         epoch_options.append("All epochs combined")
 
         selected = st.selectbox(
             "Show distributions for:",
             range(dims['n_epochs'] + 1),
             index=dims['n_epochs'],  # Default to "All epochs"
-            format_func=lambda x: epoch_options[x] if x < dims['n_epochs'] else "All epochs combined",
+            format_func=lambda x: epoch_options[x] if x < len(epoch_options) else "All epochs combined",
             key="feature_dist_epoch",
         )
         use_all_epochs = selected == dims['n_epochs']

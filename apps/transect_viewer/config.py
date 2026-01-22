@@ -1,20 +1,27 @@
 """Configuration for transect viewer app."""
 
+from pathlib import Path
+from typing import Union
+import math
+
+# Project root (transect-transformer/)
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+
 # App settings
 APP_TITLE = "CliffCast Transect Viewer"
 APP_ICON = ":ocean:"
-DEFAULT_DATA_PATH = "data/processed/transects.npz"
+DEFAULT_DATA_PATH = str(PROJECT_ROOT / "data/processed/transects.npz")
 
 # Supported data types (future extensibility)
 SUPPORTED_DATA_TYPES = {
     'transects': True,
-    'wave': False,      # Future: wave forcing time series
-    'precipitation': False,  # Future: precip time series
+    'wave': True,
+    'precipitation': True,
 }
 
-# Default forcing data locations
-WAVE_DATA_DIR = "data/raw/cdip"
-ATMOS_DATA_DIR = "data/processed/atmospheric"
+# Default forcing data locations (absolute paths)
+WAVE_DATA_DIR = str(PROJECT_ROOT / "data/raw/cdip")
+ATMOS_DATA_DIR = str(PROJECT_ROOT / "data/processed/atmospheric")
 
 # View mode options
 VIEW_MODES = [
@@ -90,3 +97,24 @@ METADATA_UNITS = {
     'mean_intensity': '',
     'dominant_class': '',
 }
+
+
+def format_value(value: Union[float, int, None], decimals: int = 3, suffix: str = "") -> str:
+    """Format a numeric value for display, handling NaN/None gracefully.
+
+    Args:
+        value: The value to format
+        decimals: Number of decimal places
+        suffix: Optional suffix (e.g., " m" for meters)
+
+    Returns:
+        Formatted string, or "N/A" if value is NaN/None/inf
+    """
+    if value is None:
+        return "N/A"
+    try:
+        if math.isnan(value) or math.isinf(value):
+            return "N/A"
+        return f"{value:.{decimals}f}{suffix}"
+    except (TypeError, ValueError):
+        return "N/A"

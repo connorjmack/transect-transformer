@@ -1,4 +1,5 @@
 [server]
-# Increase max message size for large transect data cubes
-# Default is 200 MB; set to 400 MB to handle unified cubes
-maxMessageSize = 400
+# Increase limits for large transect data cubes
+# Default is 200 MB; set to 10 GB to effectively remove limits
+maxMessageSize = 10000
+maxUploadSize = 10000

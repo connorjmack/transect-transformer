@@ -40,30 +40,60 @@ def render_inspector():
             st.error("No transects found in data")
             return
 
-    # Header with navigation
-    epoch_label = ""
-    if is_cube and epoch_dates:
-        epoch_label = f" - {epoch_dates[epoch_idx][:10]}"
-    elif is_cube:
-        epoch_label = f" - Epoch {epoch_idx}"
+    # Header
+    st.header("Transect Inspector")
 
-    st.header(f"Transect Inspector: ID {transect_id}{epoch_label}")
-
-    # Navigation buttons
+    # Navigation - dropdown for transect selection
     transect_ids = get_all_transect_ids(data)
-    current_idx = transect_ids.index(transect_id) if transect_id in transect_ids else 0
+    mop_ids = data.get('mop_ids', None)
 
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col1:
-        if st.button("Previous", disabled=current_idx == 0):
-            st.session_state.selected_transect_id = transect_ids[current_idx - 1]
-            st.rerun()
-    with col2:
-        st.write(f"Transect {current_idx + 1} of {len(transect_ids)}")
-    with col3:
-        if st.button("Next", disabled=current_idx >= len(transect_ids) - 1):
-            st.session_state.selected_transect_id = transect_ids[current_idx + 1]
-            st.rerun()
+    # Create display labels for dropdown
+    if mop_ids is not None:
+        if isinstance(mop_ids, np.ndarray):
+            mop_ids = mop_ids.tolist()
+        # Create unique MOP list for dropdown (deduplicated)
+        unique_mops = sorted(set(mop_ids))
+        # Map each unique MOP to its first transect_id
+        mop_to_transect = {}
+        for tid, mop in zip(transect_ids, mop_ids):
+            if mop not in mop_to_transect:
+                mop_to_transect[mop] = tid
+
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            selected_mop = st.selectbox(
+                "Select MOP",
+                unique_mops,
+                index=unique_mops.index(mop_ids[transect_ids.index(transect_id)]) if transect_id in transect_ids else 0,
+                key="inspector_mop_select",
+            )
+            # Update transect_id based on selected MOP
+            new_transect_id = mop_to_transect[selected_mop]
+            if new_transect_id != transect_id:
+                st.session_state.selected_transect_id = new_transect_id
+                st.rerun()
+        with col2:
+            # Show epoch info
+            if is_cube and epoch_dates:
+                st.markdown(f"**Epoch:** {epoch_dates[epoch_idx][:10]}")
+            elif is_cube:
+                st.markdown(f"**Epoch:** {epoch_idx}")
+    else:
+        # Fallback to transect_id dropdown if no mop_ids
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            selected_tid = st.selectbox(
+                "Select Transect",
+                transect_ids,
+                index=transect_ids.index(transect_id) if transect_id in transect_ids else 0,
+                key="inspector_transect_select",
+            )
+            if selected_tid != transect_id:
+                st.session_state.selected_transect_id = selected_tid
+                st.rerun()
+        with col2:
+            if is_cube and epoch_dates:
+                st.markdown(f"**Epoch:** {epoch_dates[epoch_idx][:10]}")
 
     # Get transect data for specific epoch
     try:
@@ -108,19 +138,19 @@ def _render_metadata_summary(transect: dict, is_cube: bool, epoch_dates: list, e
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Cliff Height", f"{metadata[0]:.2f} m")
-        st.metric("Mean Slope", f"{metadata[1]:.1f}°")
+        st.metric("Cliff Height", config.format_value(metadata[0], 2, " m"))
+        st.metric("Mean Slope", config.format_value(metadata[1], 1, "°"))
 
     with col2:
-        st.metric("Max Slope", f"{metadata[2]:.1f}°")
-        st.metric("Toe Elevation", f"{metadata[3]:.2f} m")
+        st.metric("Max Slope", config.format_value(metadata[2], 1, "°"))
+        st.metric("Toe Elevation", config.format_value(metadata[3], 2, " m"))
 
     with col3:
-        st.metric("Top Elevation", f"{metadata[4]:.2f} m")
-        st.metric("Orientation", f"{metadata[5]:.1f}°")
+        st.metric("Top Elevation", config.format_value(metadata[4], 2, " m"))
+        st.metric("Orientation", config.format_value(metadata[5], 1, "°"))
 
     with col4:
-        st.metric("Length", f"{metadata[6]:.1f} m")
+        st.metric("Length", config.format_value(metadata[6], 1, " m"))
         if is_cube and epoch_dates:
             st.metric("Epoch Date", epoch_dates[epoch_idx][:10])
         else:

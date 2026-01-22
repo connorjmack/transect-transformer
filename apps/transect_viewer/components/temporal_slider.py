@@ -534,10 +534,10 @@ def _render_epoch_metadata(transect: dict, epoch_label: str):
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Cliff Height", f"{metadata[0]:.2f} m")
+        st.metric("Cliff Height", config.format_value(metadata[0], 2, " m"))
     with col2:
-        st.metric("Mean Slope", f"{metadata[1]:.1f} deg")
+        st.metric("Mean Slope", config.format_value(metadata[1], 1, " deg"))
     with col3:
-        st.metric("Max Slope", f"{metadata[2]:.1f} deg")
+        st.metric("Max Slope", config.format_value(metadata[2], 1, " deg"))
     with col4:
-        st.metric("Length", f"{metadata[6]:.1f} m")
+        st.metric("Length", config.format_value(metadata[6], 1, " m"))

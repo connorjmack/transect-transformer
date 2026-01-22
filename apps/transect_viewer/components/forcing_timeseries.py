@@ -143,7 +143,7 @@ def render_forcing_timeseries():
         )
         st.session_state.selected_transect_id = transect_id
 
-    mop_id = _parse_mop_id(transect_id)
+    mop_id = _get_mop_id_from_data(data, transect_id)
     beach = _safe_beach_lookup(mop_id)
 
     with col2:
@@ -365,7 +365,7 @@ def _render_cliff_slider(
     selected_epoch: int,
     selected_label: str,
 ):
-    """Render cliff profile slider for elevation over time."""
+    """Render cliff profile slider for elevation over time with toe/top markers."""
     st.subheader("Cliff profiles over time")
 
     # Compute fixed x-axis range across all epochs
@@ -407,32 +407,114 @@ def _render_cliff_slider(
             name='Elevation',
         )
     )
+
+    # Add cliff toe and top markers if available
+    toe_dist, top_dist, toe_elev, top_elev = _get_cliff_positions_for_plot(
+        data, transect_id, selected_epoch, distances, values
+    )
+
+    if toe_dist is not None and toe_elev is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[toe_dist],
+                y=[toe_elev],
+                mode='markers',
+                marker=dict(color='#e74c3c', size=14, symbol='triangle-up'),
+                name='Cliff Toe',
+                hovertemplate='Toe: %{x:.1f}m, %{y:.1f}m<extra></extra>',
+            )
+        )
+
+    if top_dist is not None and top_elev is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=[top_dist],
+                y=[top_elev],
+                mode='markers',
+                marker=dict(color='#27ae60', size=14, symbol='triangle-down'),
+                name='Cliff Top',
+                hovertemplate='Top: %{x:.1f}m, %{y:.1f}m<extra></extra>',
+            )
+        )
+
     fig.update_layout(
         height=450,
         title=f"Elevation profile - {selected_label}",
         xaxis_title="Distance from toe (m)",
         yaxis_title="Elevation (m)",
-        showlegend=False,
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
     )
     if x_range:
         fig.update_xaxes(range=x_range)
     st.plotly_chart(fig, use_container_width=True)
 
+    # Show toe/top info below the plot
+    if toe_dist is not None or top_dist is not None:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if toe_dist is not None and toe_elev is not None:
+                st.metric("Cliff Toe", f"{toe_dist:.1f}m @ {toe_elev:.1f}m elev")
+            else:
+                st.metric("Cliff Toe", "Not detected")
+        with col2:
+            if top_dist is not None and top_elev is not None:
+                st.metric("Cliff Top", f"{top_dist:.1f}m @ {top_elev:.1f}m elev")
+            else:
+                st.metric("Cliff Top", "Not detected")
+        with col3:
+            if toe_elev is not None and top_elev is not None:
+                cliff_height = top_elev - toe_elev
+                st.metric("Cliff Height", f"{cliff_height:.1f}m")
+            else:
+                st.metric("Cliff Height", "N/A")
+
 
 def _parse_mop_id(transect_id) -> Optional[int]:
-    """Extract MOP id from transect identifier."""
+    """Extract MOP id from transect identifier.
+
+    Handles formats like:
+    - 520 (int)
+    - 'MOP 520' (string with MOP prefix)
+    - 'MOP 520_001' (string with MOP prefix and sub-index)
+    """
     if transect_id is None:
         return None
     if isinstance(transect_id, (int, np.integer)):
         return int(transect_id)
     if isinstance(transect_id, str):
-        digits = ''.join(ch for ch in transect_id if ch.isdigit())
+        # Remove 'MOP ' prefix if present
+        cleaned = transect_id.replace('MOP ', '').replace('mop ', '')
+        # Take only the part before underscore (e.g., '520' from '520_001')
+        base_id = cleaned.split('_')[0]
+        # Extract digits from the base ID
+        digits = ''.join(ch for ch in base_id if ch.isdigit())
         if digits:
             try:
                 return int(digits)
             except ValueError:
                 return None
     return None
+
+
+def _get_mop_id_from_data(data: dict, transect_id) -> Optional[int]:
+    """Get MOP ID from cube data's mop_ids field if available."""
+    # If mop_ids field exists, use it directly
+    if 'mop_ids' in data:
+        transect_ids = data.get('transect_ids', [])
+        if isinstance(transect_ids, np.ndarray):
+            transect_ids = transect_ids.tolist()
+
+        mop_ids = data['mop_ids']
+
+        try:
+            idx = transect_ids.index(transect_id)
+            return int(mop_ids[idx])
+        except (ValueError, IndexError):
+            pass
+
+    # Fallback to parsing from transect_id string
+    return _parse_mop_id(transect_id)
 
 
 def _safe_beach_lookup(mop_id: Optional[int]) -> Optional[str]:
@@ -490,3 +572,104 @@ def _get_feature_index(feature_names: List[str], target: str) -> Optional[int]:
         return feature_names.index(target)
     except ValueError:
         return None
+
+
+def _get_cliff_positions_for_plot(
+    data: dict,
+    transect_id,
+    epoch_idx: int,
+    distances: np.ndarray,
+    elevations: np.ndarray,
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """Get cliff toe and top positions for plotting.
+
+    Returns:
+        Tuple of (toe_distance, top_distance, toe_elevation, top_elevation)
+        Any value may be None if not available.
+    """
+    toe_dist = None
+    top_dist = None
+    toe_elev = None
+    top_elev = None
+
+    # Get transect index
+    transect_ids = data.get('transect_ids', [])
+    if isinstance(transect_ids, np.ndarray):
+        transect_ids = transect_ids.tolist()
+
+    try:
+        transect_idx = transect_ids.index(transect_id)
+    except (ValueError, TypeError):
+        return toe_dist, top_dist, toe_elev, top_elev
+
+    # Try toe_relative_m / top_relative_m format (processed data)
+    if 'toe_relative_m' in data and 'top_relative_m' in data:
+        toe_arr = data['toe_relative_m']
+        top_arr = data['top_relative_m']
+
+        # Handle 2D (transects x epochs) or 1D (transects only) arrays
+        if toe_arr.ndim == 2:
+            toe_dist = float(toe_arr[transect_idx, epoch_idx])
+            top_dist = float(top_arr[transect_idx, epoch_idx])
+        else:
+            toe_dist = float(toe_arr[transect_idx])
+            top_dist = float(top_arr[transect_idx])
+
+        # Check for NaN
+        if np.isnan(toe_dist):
+            toe_dist = None
+        if np.isnan(top_dist):
+            top_dist = None
+
+    # Try toe_distances / top_distances format (raw extraction data)
+    elif 'toe_distances' in data and 'top_distances' in data:
+        toe_arr = data['toe_distances']
+        top_arr = data['top_distances']
+        has_cliff = data.get('has_cliff')
+
+        if has_cliff is not None:
+            if has_cliff.ndim == 2:
+                if not has_cliff[transect_idx, epoch_idx]:
+                    return toe_dist, top_dist, toe_elev, top_elev
+            elif not has_cliff[transect_idx]:
+                return toe_dist, top_dist, toe_elev, top_elev
+
+        if toe_arr.ndim == 2:
+            toe_dist = float(toe_arr[transect_idx, epoch_idx])
+            top_dist = float(top_arr[transect_idx, epoch_idx])
+        else:
+            toe_dist = float(toe_arr[transect_idx])
+            top_dist = float(top_arr[transect_idx])
+
+    # Interpolate elevations at toe/top distances
+    if toe_dist is not None and not np.isnan(toe_dist):
+        toe_elev = _interpolate_elevation(distances, elevations, toe_dist)
+
+    if top_dist is not None and not np.isnan(top_dist):
+        top_elev = _interpolate_elevation(distances, elevations, top_dist)
+
+    return toe_dist, top_dist, toe_elev, top_elev
+
+
+def _interpolate_elevation(
+    distances: np.ndarray,
+    elevations: np.ndarray,
+    target_dist: float,
+) -> Optional[float]:
+    """Interpolate elevation at a given distance."""
+    # Remove NaN values
+    valid_mask = ~np.isnan(distances) & ~np.isnan(elevations)
+    if not valid_mask.any():
+        return None
+
+    valid_dist = distances[valid_mask]
+    valid_elev = elevations[valid_mask]
+
+    # Check if target is in range
+    if target_dist < valid_dist.min() or target_dist > valid_dist.max():
+        # Use nearest point if out of range
+        idx = np.argmin(np.abs(valid_dist - target_dist))
+        return float(valid_elev[idx])
+
+    # Linear interpolation
+    return float(np.interp(target_dist, valid_dist, valid_elev))

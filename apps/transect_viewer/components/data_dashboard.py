@@ -1,5 +1,7 @@
 """Data dashboard component showing overview and statistics."""
 
+from typing import List, Optional
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -104,7 +106,7 @@ def _render_overview_metrics(data: dict):
             metadata = data['metadata']
             cliff_heights = metadata[:, -1, 0]  # Latest epoch, cliff_height_m
             avg_height = np.nanmean(cliff_heights)
-            st.metric("Avg Cliff Height", f"{avg_height:.1f} m")
+            st.metric("Avg Cliff Height", config.format_value(avg_height, 1, " m"))
     else:
         with col4:
             st.metric("Format", "Flat (1 epoch)")
@@ -113,7 +115,7 @@ def _render_overview_metrics(data: dict):
             metadata = data['metadata']
             cliff_heights = metadata[:, 0]  # cliff_height_m
             avg_height = np.nanmean(cliff_heights)
-            st.metric("Avg Cliff Height", f"{avg_height:.1f} m")
+            st.metric("Avg Cliff Height", config.format_value(avg_height, 1, " m"))
 
 
 def _render_spatiotemporal_coverage_map(data: dict):
@@ -164,21 +166,21 @@ def _render_spatiotemporal_coverage_map(data: dict):
         hovertemplate='MOP: %{y}<br>Epoch: %{x}<br>Data: %{z}<extra></extra>',
     ))
 
+    annotations = []
+    shapes = []
+
     # Add beach boundary lines and labels if available
+    beach_order = ['blacks', 'torrey', 'delmar', 'solana', 'sanelijo', 'encinitas']
+    beach_display_names = {
+        'blacks': "Black's Beach",
+        'torrey': 'Torrey Pines',
+        'delmar': 'Del Mar',
+        'solana': 'Solana Beach',
+        'sanelijo': 'San Elijo',
+        'encinitas': 'Encinitas'
+    }
+
     if beach_slices:
-        beach_order = ['blacks', 'torrey', 'delmar', 'solana', 'sanelijo', 'encinitas']
-        beach_display_names = {
-            'blacks': "Black's Beach",
-            'torrey': 'Torrey Pines',
-            'delmar': 'Del Mar',
-            'solana': 'Solana Beach',
-            'sanelijo': 'San Elijo',
-            'encinitas': 'Encinitas'
-        }
-
-        annotations = []
-        shapes = []
-
         for beach_name in beach_order:
             if beach_name in beach_slices:
                 start_idx, end_idx = beach_slices[beach_name]
@@ -213,7 +215,7 @@ def _render_spatiotemporal_coverage_map(data: dict):
                         line=dict(color='white', width=2),
                     ))
 
-        fig.update_layout(annotations=annotations, shapes=shapes)
+    fig.update_layout(annotations=annotations, shapes=shapes)
 
     # Determine appropriate height based on number of transects
     n_transects = len(mop_ids)
@@ -228,16 +230,17 @@ def _render_spatiotemporal_coverage_map(data: dict):
         xaxis=dict(
             tickangle=45,
             side='bottom',
+            type='category',  # Force categorical axis to prevent date interpretation
         ),
         yaxis=dict(
             autorange='reversed',  # Higher MOP IDs at top
         ),
-        margin=dict(l=120, r=20, t=60, b=80),  # Extra left margin for beach labels
+        margin=dict(l=120, r=40, t=60, b=80),  # Extra margins for labels
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # Summary stats
+    # Summary stats for cliff data
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Cells", coverage['total_cells'])
@@ -624,6 +627,7 @@ def _render_temporal_coverage(data: dict):
         xaxis_title="Epoch",
         yaxis_title="Transect ID",
         height=min(600, 100 + len(display_ids) * 5),
+        xaxis=dict(type='category'),  # Force categorical axis
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -648,6 +652,7 @@ def _render_temporal_coverage(data: dict):
         xaxis_title="Epoch",
         yaxis_title="Transects with Data",
         height=300,
+        xaxis=dict(type='category'),  # Force categorical axis
     )
 
     st.plotly_chart(fig, use_container_width=True)

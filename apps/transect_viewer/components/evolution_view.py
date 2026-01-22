@@ -314,16 +314,16 @@ def _render_change_detection(
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Mean Change", f"{change['mean_change']:.3f}")
+        st.metric("Mean Change", config.format_value(change['mean_change']))
 
     with col2:
-        st.metric("Max Increase", f"{change['max_change']:.3f}")
+        st.metric("Max Increase", config.format_value(change['max_change']))
 
     with col3:
-        st.metric("Max Decrease", f"{change['min_change']:.3f}")
+        st.metric("Max Decrease", config.format_value(change['min_change']))
 
     with col4:
-        st.metric("Std Dev", f"{change['std_change']:.3f}")
+        st.metric("Std Dev", config.format_value(change['std_change']))
 
 
 def _render_temporal_heatmap(

@@ -262,6 +262,8 @@ def train(
     val_path: Optional[Path] = None,
     checkpoint_dir: Path = Path('checkpoints'),
     debug: bool = False,
+    subset_fraction: Optional[float] = None,
+    max_epochs_override: Optional[int] = None,
 ):
     """Main training function."""
     # Setup - prefer MPS (Apple Silicon) over CPU
@@ -291,8 +293,10 @@ def train(
         train_cfg['batch_size'] = 8
         train_cfg['max_epochs'] = 3
         subset_fraction = 0.01
-    else:
-        subset_fraction = None
+
+    # Override max epochs if specified
+    if max_epochs_override is not None:
+        train_cfg['max_epochs'] = max_epochs_override
 
     # Create data loaders
     logger.info(f"Loading training data from {train_path}")
@@ -465,6 +469,18 @@ def main():
         action='store_true',
         help='Debug mode: small model, few epochs, data subset'
     )
+    parser.add_argument(
+        '--subset',
+        type=float,
+        default=None,
+        help='Fraction of data to use (0.0-1.0), e.g. 0.1 for 10%%'
+    )
+    parser.add_argument(
+        '--epochs',
+        type=int,
+        default=None,
+        help='Override max epochs from config'
+    )
 
     args = parser.parse_args()
 
@@ -509,6 +525,8 @@ def main():
         val_path=val_path,
         checkpoint_dir=args.checkpoint_dir,
         debug=args.debug,
+        subset_fraction=args.subset,
+        max_epochs_override=args.epochs,
     )
 
     return 0

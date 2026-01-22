@@ -59,13 +59,14 @@ def render_inspector():
             mop_ids = mop_ids.tolist()
         # Create unique MOP list for dropdown (deduplicated)
         unique_mops = sorted(set(mop_ids))
-        # Map each unique MOP to its first transect_id (using original order for alignment)
-        mop_to_transect = {}
+        # Map each unique MOP to ALL its transect_ids (preserving order)
+        mop_to_transects = {}
         for tid, mop in zip(original_transect_ids, mop_ids):
-            if mop not in mop_to_transect:
-                mop_to_transect[mop] = tid
+            if mop not in mop_to_transects:
+                mop_to_transects[mop] = []
+            mop_to_transects[mop].append(tid)
 
-        col1, col2 = st.columns([1, 2])
+        col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
             # Find current MOP for selected transect (use original order for alignment)
             current_mop_idx = 0
@@ -81,12 +82,38 @@ def render_inspector():
                 index=current_mop_idx,
                 key="inspector_mop_select",
             )
-            # Update transect_id based on selected MOP
-            new_transect_id = mop_to_transect[selected_mop]
+
+        with col2:
+            # Get all transects for selected MOP
+            transects_for_mop = mop_to_transects.get(selected_mop, [])
+            n_sub = len(transects_for_mop)
+
+            if n_sub > 1:
+                # Find current sub-transect index
+                current_sub_idx = 0
+                if transect_id in transects_for_mop:
+                    current_sub_idx = transects_for_mop.index(transect_id)
+
+                # Show sub-transect selector
+                sub_labels = [f"Sub {i+1} (ID: {tid})" for i, tid in enumerate(transects_for_mop)]
+                selected_sub_idx = st.selectbox(
+                    f"Sub-transect ({n_sub} total)",
+                    range(n_sub),
+                    index=current_sub_idx,
+                    format_func=lambda x: sub_labels[x] if x < len(sub_labels) else f"Sub {x+1}",
+                    key="inspector_sub_select",
+                )
+                new_transect_id = transects_for_mop[selected_sub_idx]
+            else:
+                # Only one transect for this MOP
+                new_transect_id = transects_for_mop[0] if transects_for_mop else transect_id
+                st.markdown(f"**Transect ID:** {new_transect_id}")
+
             if new_transect_id != transect_id:
                 st.session_state.selected_transect_id = new_transect_id
                 st.rerun()
-        with col2:
+
+        with col3:
             # Show epoch info
             if is_cube and epoch_dates:
                 st.markdown(f"**Epoch:** {safe_date_label(epoch_dates, epoch_idx)}")

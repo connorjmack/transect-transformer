@@ -46,16 +46,22 @@ def _load_wave_dataframe(
     data_dir: str,
 ) -> Tuple[Optional[pd.DataFrame], Optional[dict]]:
     """Load full wave time series for a MOP and resample to daily averages."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         loader = _get_wave_loader(data_dir)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        logger.warning(f"Wave data directory not found: {e}")
         return None, None
 
     try:
         wave = loader.load_mop(mop_id=mop_id)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        logger.warning(f"Wave file not found for MOP {mop_id}: {e}")
         return None, None
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error loading wave data for MOP {mop_id}: {e}")
         return None, None
 
     df = pd.DataFrame({
@@ -92,18 +98,25 @@ def _load_atmos_dataframe(
     data_dir: str,
 ) -> Optional[pd.DataFrame]:
     """Load full atmospheric time series for a beach."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         loader = _get_atmos_loader(data_dir)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        logger.warning(f"Atmospheric data directory not found: {e}")
         return None
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error creating atmospheric loader: {e}")
         return None
 
     try:
         df = loader._load_beach_data(beach)  # pylint: disable=protected-access
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        logger.warning(f"Atmospheric data not found for beach {beach}: {e}")
         return None
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error loading atmospheric data for beach {beach}: {e}")
         return None
 
     return df.reset_index().rename(columns={'index': 'date'})
@@ -153,6 +166,24 @@ def render_forcing_timeseries():
         st.write(f"Beach: `{beach if beach else 'n/a'}`")
         st.write(f"Epochs: {dims['n_epochs']}")
 
+    # Debug: show data loading paths
+    with st.expander("Debug: Data Loading", expanded=False):
+        st.write(f"**Wave data dir:** `{config.WAVE_DATA_DIR}`")
+        wave_dir_exists = Path(config.WAVE_DATA_DIR).exists()
+        st.write(f"**Wave dir exists:** {wave_dir_exists}")
+        if mop_id is not None:
+            expected_wave_file = Path(config.WAVE_DATA_DIR) / f"D{mop_id:04d}_hindcast.nc"
+            st.write(f"**Expected wave file:** `{expected_wave_file}`")
+            st.write(f"**Wave file exists:** {expected_wave_file.exists()}")
+
+        st.write(f"**Atmos data dir:** `{config.ATMOS_DATA_DIR}`")
+        atmos_dir_exists = Path(config.ATMOS_DATA_DIR).exists()
+        st.write(f"**Atmos dir exists:** {atmos_dir_exists}")
+        if beach:
+            expected_atmos_file = Path(config.ATMOS_DATA_DIR) / f"{beach}_atmos.parquet"
+            st.write(f"**Expected atmos file:** `{expected_atmos_file}`")
+            st.write(f"**Atmos file exists:** {expected_atmos_file.exists()}")
+
     wave_df, wave_meta = _load_wave_dataframe(
         mop_id=mop_id,
         data_dir=config.WAVE_DATA_DIR,
@@ -162,6 +193,17 @@ def render_forcing_timeseries():
         beach=beach,
         data_dir=config.ATMOS_DATA_DIR,
     ) if beach else None
+
+    # Debug: show data loading results
+    with st.expander("Debug: Data Loading Results", expanded=False):
+        st.write(f"**wave_df:** {type(wave_df).__name__}, shape={wave_df.shape if wave_df is not None else 'N/A'}")
+        st.write(f"**wave_meta:** {wave_meta}")
+        st.write(f"**atmos_df:** {type(atmos_df).__name__}, shape={atmos_df.shape if atmos_df is not None else 'N/A'}")
+        if st.button("Clear Streamlit Cache"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.success("Cache cleared! Please reload the page.")
+            st.rerun()
 
     _render_availability(wave_df, atmos_df, dims)
 
@@ -244,56 +286,67 @@ def _render_wave_section(
 ):
     """Plot wave forcing timelines."""
     st.subheader("Wave parameters")
-    if df is None or df.empty:
+
+    # Debug info
+    if df is None:
         st.info(f"No wave data found in {config.WAVE_DATA_DIR} for this transect.")
         return
+    if df.empty:
+        st.info(f"Wave data is empty for this transect.")
+        return
 
-    fig = make_subplots(
-        rows=4,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.04,
-        subplot_titles=[
-            "Significant wave height (m)",
-            "Peak period (s)",
-            "Peak direction (deg)",
-            "Wave power (kW/m)",
-        ],
-    )
+    try:
+        fig = make_subplots(
+            rows=4,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.04,
+            subplot_titles=[
+                "Significant wave height (m)",
+                "Peak period (s)",
+                "Peak direction (deg)",
+                "Wave power (kW/m)",
+            ],
+        )
 
-    fig.add_trace(
-        go.Scatter(x=df['time'], y=df['hs'], mode='lines', name='Hs', line=dict(color='#1f77b4')),
-        row=1, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=df['time'], y=df['tp'], mode='lines', name='Tp', line=dict(color='#ff7f0e')),
-        row=2, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=df['time'], y=df['dp'], mode='lines', name='Dp', line=dict(color='#2ca02c')),
-        row=3, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=df['time'], y=df['power'], mode='lines', name='Power', line=dict(color='#d62728')),
-        row=4, col=1,
-    )
+        fig.add_trace(
+            go.Scatter(x=df['time'], y=df['hs'], mode='lines', name='Hs', line=dict(color='#1f77b4')),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=df['time'], y=df['tp'], mode='lines', name='Tp', line=dict(color='#ff7f0e')),
+            row=2, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=df['time'], y=df['dp'], mode='lines', name='Dp', line=dict(color='#2ca02c')),
+            row=3, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=df['time'], y=df['power'], mode='lines', name='Power', line=dict(color='#d62728')),
+            row=4, col=1,
+        )
 
-    _add_epoch_lines(fig, epoch_dates)
-    _add_selected_line(fig, selected_date)
+        _add_epoch_lines(fig, epoch_dates)
+        _add_selected_line(fig, selected_date)
 
-    fig.update_layout(
-        height=800,
-        showlegend=False,
-    )
-    fig.update_yaxes(title_text="m", row=1, col=1)
-    fig.update_yaxes(title_text="s", row=2, col=1)
-    fig.update_yaxes(title_text="deg", row=3, col=1)
-    fig.update_yaxes(title_text="kW/m", row=4, col=1)
+        fig.update_layout(
+            height=800,
+            showlegend=False,
+        )
+        fig.update_yaxes(title_text="m", row=1, col=1)
+        fig.update_yaxes(title_text="s", row=2, col=1)
+        fig.update_yaxes(title_text="deg", row=3, col=1)
+        fig.update_yaxes(title_text="kW/m", row=4, col=1)
 
-    st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-    if meta:
-        st.caption(f"Wave node depth {meta['water_depth']:.1f} m at ({meta['latitude']:.3f}, {meta['longitude']:.3f})")
+        if meta:
+            st.caption(f"Wave node depth {meta['water_depth']:.1f} m at ({meta['latitude']:.3f}, {meta['longitude']:.3f})")
+
+    except Exception as e:
+        st.error(f"Error rendering wave plot: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 
 def _render_rain_section(
@@ -304,57 +357,67 @@ def _render_rain_section(
 ):
     """Plot precipitation-related timelines."""
     st.subheader("Rain parameters")
-    if df is None or df.empty:
+
+    if df is None:
         missing = f" for {beach}" if beach else ""
         st.info(f"No atmospheric data found in {config.ATMOS_DATA_DIR}{missing}.")
         return
+    if df.empty:
+        st.info(f"Atmospheric data is empty for {beach}.")
+        return
 
-    fig = make_subplots(
-        rows=3,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.05,
-        subplot_titles=[
-            "Daily precipitation (mm)",
-            "7 / 30 day accumulation (mm)",
-            "90 day accumulation + API",
-        ],
-    )
-
-    fig.add_trace(
-        go.Bar(x=df['date'], y=df['precip_mm'], name='Daily precip', marker_color='#1f77b4'),
-        row=1, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=df['date'], y=df['precip_7d'], name='Precip 7d', line=dict(color='#ff7f0e')),
-        row=2, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=df['date'], y=df['precip_30d'], name='Precip 30d', line=dict(color='#2ca02c')),
-        row=2, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=df['date'], y=df['precip_90d'], name='Precip 90d', line=dict(color='#9467bd')),
-        row=3, col=1,
-    )
-    if 'api' in df.columns:
-        fig.add_trace(
-            go.Scatter(x=df['date'], y=df['api'], name='API', line=dict(color='#e377c2')),
-            row=3, col=1,
+    try:
+        fig = make_subplots(
+            rows=3,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            subplot_titles=[
+                "Daily precipitation (mm)",
+                "7 / 30 day accumulation (mm)",
+                "90 day accumulation + API",
+            ],
         )
 
-    _add_epoch_lines(fig, epoch_dates)
-    _add_selected_line(fig, selected_date)
+        fig.add_trace(
+            go.Bar(x=df['date'], y=df['precip_mm'], name='Daily precip', marker_color='#1f77b4'),
+            row=1, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=df['date'], y=df['precip_7d'], name='Precip 7d', line=dict(color='#ff7f0e')),
+            row=2, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=df['date'], y=df['precip_30d'], name='Precip 30d', line=dict(color='#2ca02c')),
+            row=2, col=1,
+        )
+        fig.add_trace(
+            go.Scatter(x=df['date'], y=df['precip_90d'], name='Precip 90d', line=dict(color='#9467bd')),
+            row=3, col=1,
+        )
+        if 'api' in df.columns:
+            fig.add_trace(
+                go.Scatter(x=df['date'], y=df['api'], name='API', line=dict(color='#e377c2')),
+                row=3, col=1,
+            )
 
-    fig.update_layout(
-        height=700,
-        showlegend=False,
-    )
-    fig.update_yaxes(title_text="mm", row=1, col=1)
-    fig.update_yaxes(title_text="mm", row=2, col=1)
-    fig.update_yaxes(title_text="mm", row=3, col=1)
+        _add_epoch_lines(fig, epoch_dates)
+        _add_selected_line(fig, selected_date)
 
-    st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            height=700,
+            showlegend=False,
+        )
+        fig.update_yaxes(title_text="mm", row=1, col=1)
+        fig.update_yaxes(title_text="mm", row=2, col=1)
+        fig.update_yaxes(title_text="mm", row=3, col=1)
+
+        st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Error rendering rain plot: {e}")
+        import traceback
+        st.code(traceback.format_exc())
 
 
 def _render_cliff_slider(
@@ -518,18 +581,56 @@ def _get_mop_id_from_data(data: dict, transect_id) -> Optional[int]:
 
 
 def _safe_beach_lookup(mop_id: Optional[int]) -> Optional[str]:
-    """Resolve beach name from MOP id, ignoring errors."""
+    """Resolve beach name from MOP id, with fallback for gaps.
+
+    Some MOPs are in gaps between beaches. For these, we find the
+    nearest beach by MOP number.
+    """
     if mop_id is None:
         return None
     try:
         return get_beach_for_mop(mop_id)
+    except ValueError:
+        # MOP is in a gap - find nearest beach
+        from src.data.atmos_loader import BEACH_MOP_RANGES
+
+        nearest_beach = None
+        min_distance = float('inf')
+
+        for beach, (mop_min, mop_max) in BEACH_MOP_RANGES.items():
+            # Distance to this beach's range
+            if mop_id < mop_min:
+                dist = mop_min - mop_id
+            elif mop_id > mop_max:
+                dist = mop_id - mop_max
+            else:
+                dist = 0  # Should not happen if get_beach_for_mop raised
+
+            if dist < min_distance:
+                min_distance = dist
+                nearest_beach = beach
+
+        return nearest_beach
     except Exception:
         return None
 
 
-def _add_epoch_lines(fig: go.Figure, epoch_dates: List[str]):
-    """Add vertical dashed lines for LiDAR scan dates."""
+def _add_epoch_lines(fig: go.Figure, epoch_dates: List[str], max_lines: int = 20):
+    """Add vertical dashed lines for LiDAR scan dates.
+
+    Limits to max_lines evenly spaced epochs to avoid rendering issues.
+    """
     scan_dates = _parse_epoch_timestamps(epoch_dates)
+    if not scan_dates:
+        return
+
+    # Limit number of lines to avoid rendering issues
+    n_dates = len(scan_dates)
+    if n_dates > max_lines:
+        # Sample evenly spaced dates
+        step = n_dates // max_lines
+        scan_dates = scan_dates[::step]
+
     for dt in scan_dates:
         fig.add_vline(
             x=dt,

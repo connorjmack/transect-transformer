@@ -13,6 +13,7 @@ from apps.transect_viewer.utils.data_loader import (
     get_epoch_dates,
     is_cube_format,
 )
+from apps.transect_viewer.utils.helpers import safe_epoch_option
 
 
 def render_sidebar() -> str:
@@ -190,14 +191,7 @@ def _render_view_options(view_mode: str):
         # Epoch selector (for cube format)
         if is_cube and dims['n_epochs'] > 1:
             epoch_dates = get_epoch_dates(data)
-
-            def _safe_epoch_label(i):
-                if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
-                    d = epoch_dates[i]
-                    return f"{i}: {d[:10]}" if isinstance(d, str) and len(d) >= 10 else f"{i}: {d}"
-                return f"Epoch {i}"
-
-            epoch_options = [_safe_epoch_label(i) for i in range(dims['n_epochs'])]
+            epoch_options = [safe_epoch_option(epoch_dates, i) for i in range(dims['n_epochs'])]
 
             selected_epoch = st.sidebar.selectbox(
                 "Epoch",
@@ -254,14 +248,7 @@ def _render_view_options(view_mode: str):
         # Epoch selector for cross-transect view
         if is_cube and dims['n_epochs'] > 1:
             epoch_dates = get_epoch_dates(data)
-
-            def _safe_cross_epoch_label(i):
-                if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
-                    d = epoch_dates[i]
-                    return f"{i}: {d[:10]}" if isinstance(d, str) and len(d) >= 10 else f"{i}: {d}"
-                return f"Epoch {i}"
-
-            epoch_options = [_safe_cross_epoch_label(i) for i in range(dims['n_epochs'])]
+            epoch_options = [safe_epoch_option(epoch_dates, i) for i in range(dims['n_epochs'])]
 
             selected_epoch = st.sidebar.selectbox(
                 "Epoch to Display",

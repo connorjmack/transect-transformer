@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from apps.transect_viewer.utils.helpers import safe_date_label
+
 
 # Expected value ranges for each feature
 FEATURE_RANGES = {
@@ -403,7 +405,7 @@ def compute_temporal_statistics(data: dict[str, Any], feature_name: str) -> pd.D
         values = points[:, t, :, feature_idx].flatten()
         valid_values = values[~np.isnan(values)]
 
-        epoch_label = epoch_dates[t][:10] if epoch_dates else f"Epoch {t}"
+        epoch_label = safe_date_label(epoch_dates, t)
 
         stats.append({
             'epoch': epoch_label,

@@ -183,6 +183,37 @@ class TestDataLoader:
         with pytest.raises(ValueError, match="not found"):
             get_transect_by_id(cube_data, 'MOP 999')
 
+    def test_get_transect_by_id_epoch_idx_out_of_bounds(self, cube_data):
+        """Test getting transect with out-of-bounds epoch_idx raises error."""
+        from apps.transect_viewer.utils.data_loader import get_transect_by_id
+
+        # epoch_idx too large (only 3 epochs: 0, 1, 2)
+        with pytest.raises(ValueError, match="out of bounds"):
+            get_transect_by_id(cube_data, 'MOP 101', epoch_idx=5)
+
+        # epoch_idx exactly at boundary (3 is out of bounds)
+        with pytest.raises(ValueError, match="out of bounds"):
+            get_transect_by_id(cube_data, 'MOP 101', epoch_idx=3)
+
+    def test_get_transect_by_id_negative_epoch_idx(self, cube_data):
+        """Test getting transect with negative epoch_idx for last epoch."""
+        from apps.transect_viewer.utils.data_loader import get_transect_by_id
+
+        # Negative index should work like Python list indexing
+        transect = get_transect_by_id(cube_data, 'MOP 101', epoch_idx=-1)
+
+        # Should return the last epoch
+        assert transect['points'].shape == (128, 12)
+        assert transect['epoch_idx'] == 2  # Last of 3 epochs (0, 1, 2)
+
+    def test_get_transect_by_id_negative_epoch_idx_out_of_bounds(self, cube_data):
+        """Test getting transect with too-negative epoch_idx raises error."""
+        from apps.transect_viewer.utils.data_loader import get_transect_by_id
+
+        # -4 is out of bounds for 3 epochs
+        with pytest.raises(ValueError, match="out of bounds"):
+            get_transect_by_id(cube_data, 'MOP 101', epoch_idx=-4)
+
     def test_get_transect_temporal_slice(self, cube_data):
         """Test getting temporal slice for a feature."""
         from apps.transect_viewer.utils.data_loader import get_transect_temporal_slice
@@ -427,6 +458,145 @@ class TestSaveLoadRoundtrip:
         assert isinstance(loaded['transect_ids'], list)
         assert isinstance(loaded['epoch_dates'], list)
         assert isinstance(loaded['feature_names'], list)
+
+
+class TestHelpers:
+    """Test shared helper functions."""
+
+    def test_safe_date_label_valid_dates(self):
+        """Test safe_date_label with valid date strings."""
+        from apps.transect_viewer.utils.helpers import safe_date_label
+
+        dates = ['2018-01-01', '2019-06-15', '2020-12-31']
+
+        assert safe_date_label(dates, 0) == '2018-01-01'
+        assert safe_date_label(dates, 1) == '2019-06-15'
+        assert safe_date_label(dates, 2) == '2020-12-31'
+
+    def test_safe_date_label_with_timestamp(self):
+        """Test safe_date_label with full timestamp strings."""
+        from apps.transect_viewer.utils.helpers import safe_date_label
+
+        dates = ['2018-01-01T12:30:00', '2019-06-15T08:00:00']
+
+        # Should truncate to first 10 chars (date part only)
+        assert safe_date_label(dates, 0) == '2018-01-01'
+        assert safe_date_label(dates, 1) == '2019-06-15'
+
+    def test_safe_date_label_out_of_bounds(self):
+        """Test safe_date_label with out-of-bounds index."""
+        from apps.transect_viewer.utils.helpers import safe_date_label
+
+        dates = ['2018-01-01', '2019-06-15']
+
+        # Should return fallback
+        assert safe_date_label(dates, 5) == 'Epoch 5'
+        assert safe_date_label(dates, 10, "E") == 'E 10'
+
+    def test_safe_date_label_empty_dates(self):
+        """Test safe_date_label with empty or None dates."""
+        from apps.transect_viewer.utils.helpers import safe_date_label
+
+        assert safe_date_label(None, 0) == 'Epoch 0'
+        assert safe_date_label([], 0) == 'Epoch 0'
+
+    def test_safe_date_label_short_string(self):
+        """Test safe_date_label with string shorter than 10 chars."""
+        from apps.transect_viewer.utils.helpers import safe_date_label
+
+        dates = ['2018', '2019-06']
+
+        # Should return the short string as-is
+        assert safe_date_label(dates, 0) == '2018'
+        assert safe_date_label(dates, 1) == '2019-06'
+
+    def test_safe_date_label_none_element(self):
+        """Test safe_date_label with None element in dates list."""
+        from apps.transect_viewer.utils.helpers import safe_date_label
+
+        dates = ['2018-01-01', None, '2020-12-31']
+
+        assert safe_date_label(dates, 0) == '2018-01-01'
+        assert safe_date_label(dates, 1) == 'Epoch 1'  # None element
+        assert safe_date_label(dates, 2) == '2020-12-31'
+
+    def test_safe_epoch_option_valid_dates(self):
+        """Test safe_epoch_option with valid dates."""
+        from apps.transect_viewer.utils.helpers import safe_epoch_option
+
+        dates = ['2018-01-01', '2019-06-15']
+
+        assert safe_epoch_option(dates, 0) == '0: 2018-01-01'
+        assert safe_epoch_option(dates, 1) == '1: 2019-06-15'
+
+    def test_safe_epoch_option_no_dates(self):
+        """Test safe_epoch_option with no dates."""
+        from apps.transect_viewer.utils.helpers import safe_epoch_option
+
+        assert safe_epoch_option(None, 0) == 'Epoch 0'
+        assert safe_epoch_option([], 1) == 'Epoch 1'
+
+    def test_safe_epoch_option_out_of_bounds(self):
+        """Test safe_epoch_option with out-of-bounds index."""
+        from apps.transect_viewer.utils.helpers import safe_epoch_option
+
+        dates = ['2018-01-01']
+
+        assert safe_epoch_option(dates, 5) == 'Epoch 5'
+
+    def test_safe_metadata_value_valid(self):
+        """Test safe_metadata_value with valid values."""
+        from apps.transect_viewer.utils.helpers import safe_metadata_value
+
+        metadata = np.array([10.5, 45.2, 60.0, np.nan])
+
+        result = safe_metadata_value(metadata, 0, 1, " m")
+        assert "10.5" in result and "m" in result
+
+        result = safe_metadata_value(metadata, 1, 0)
+        assert "45" in result
+
+    def test_safe_metadata_value_out_of_bounds(self):
+        """Test safe_metadata_value with out-of-bounds index."""
+        from apps.transect_viewer.utils.helpers import safe_metadata_value
+
+        metadata = np.array([10.5, 45.2])
+
+        assert safe_metadata_value(metadata, 10) == "N/A"
+
+    def test_safe_metadata_value_nan(self):
+        """Test safe_metadata_value with NaN value."""
+        from apps.transect_viewer.utils.helpers import safe_metadata_value
+
+        metadata = np.array([10.5, np.nan, 60.0])
+
+        assert safe_metadata_value(metadata, 1) == "N/A"
+
+    def test_safe_metadata_format_valid(self):
+        """Test safe_metadata_format with valid values."""
+        from apps.transect_viewer.utils.helpers import safe_metadata_format
+
+        metadata = np.array([10.567, 45.2, 60.0])
+
+        assert safe_metadata_format(metadata, 0, ".2f") == "10.57"
+        assert safe_metadata_format(metadata, 1, ".1f") == "45.2"
+        assert safe_metadata_format(metadata, 2, ".0f") == "60"
+
+    def test_safe_metadata_format_out_of_bounds(self):
+        """Test safe_metadata_format with out-of-bounds index."""
+        from apps.transect_viewer.utils.helpers import safe_metadata_format
+
+        metadata = np.array([10.5])
+
+        assert safe_metadata_format(metadata, 5) == "N/A"
+
+    def test_safe_metadata_format_nan(self):
+        """Test safe_metadata_format with NaN value."""
+        from apps.transect_viewer.utils.helpers import safe_metadata_format
+
+        metadata = np.array([np.nan])
+
+        assert safe_metadata_format(metadata, 0) == "N/A"
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from apps.transect_viewer.utils.data_loader import (
     has_cliff_data,
     get_cliff_positions_by_id,
 )
+from apps.transect_viewer.utils.helpers import safe_date_label
 
 
 def render_inspector():
@@ -88,7 +89,7 @@ def render_inspector():
         with col2:
             # Show epoch info
             if is_cube and epoch_dates:
-                st.markdown(f"**Epoch:** {epoch_dates[epoch_idx][:10]}")
+                st.markdown(f"**Epoch:** {safe_date_label(epoch_dates, epoch_idx)}")
             elif is_cube:
                 st.markdown(f"**Epoch:** {epoch_idx}")
     else:
@@ -106,7 +107,7 @@ def render_inspector():
                 st.rerun()
         with col2:
             if is_cube and epoch_dates:
-                st.markdown(f"**Epoch:** {epoch_dates[epoch_idx][:10]}")
+                st.markdown(f"**Epoch:** {safe_date_label(epoch_dates, epoch_idx)}")
 
     # Get transect data for specific epoch
     try:
@@ -165,7 +166,7 @@ def _render_metadata_summary(transect: dict, is_cube: bool, epoch_dates: list, e
     with col4:
         st.metric("Length", config.format_value(metadata[6], 1, " m"))
         if is_cube and epoch_dates:
-            st.metric("Epoch Date", epoch_dates[epoch_idx][:10])
+            st.metric("Epoch Date", safe_date_label(epoch_dates, epoch_idx))
         else:
             st.metric("Transect ID", transect.get('transect_id', 'N/A'))
 

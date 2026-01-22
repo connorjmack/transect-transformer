@@ -370,19 +370,13 @@ def _render_metadata_distributions(data: dict):
     epoch_idx = st.session_state.get('selected_epoch_idx', dims['n_epochs'] - 1)
     if is_cube and dims['n_epochs'] > 1:
         epoch_dates = get_epoch_dates(data)
-        epoch_options = []
-        for i in range(dims['n_epochs']):
-            if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
-                date_str = epoch_dates[i][:10] if len(epoch_dates[i]) >= 10 else epoch_dates[i]
-                epoch_options.append(f"{i}: {date_str}")
-            else:
-                epoch_options.append(f"Epoch {i}")
+        epoch_options = [safe_epoch_option(epoch_dates, i) for i in range(dims['n_epochs'])]
 
         epoch_idx = st.selectbox(
             "Show metadata for epoch:",
             range(dims['n_epochs']),
             index=dims['n_epochs'] - 1,
-            format_func=lambda x: epoch_options[x],
+            format_func=lambda x: epoch_options[x] if x < len(epoch_options) else f"Epoch {x}",
             key="meta_dist_epoch",
         )
 
@@ -519,19 +513,13 @@ def _render_statistics_tables(data: dict):
     epoch_idx = -1  # Default to latest
     if is_cube and dims['n_epochs'] > 1:
         epoch_dates = get_epoch_dates(data)
-        epoch_options = []
-        for i in range(dims['n_epochs']):
-            if epoch_dates and i < len(epoch_dates) and epoch_dates[i]:
-                date_str = epoch_dates[i][:10] if len(epoch_dates[i]) >= 10 else epoch_dates[i]
-                epoch_options.append(f"{i}: {date_str}")
-            else:
-                epoch_options.append(f"Epoch {i}")
+        epoch_options = [safe_epoch_option(epoch_dates, i) for i in range(dims['n_epochs'])]
 
         epoch_idx = st.selectbox(
             "Compute statistics for epoch:",
             range(dims['n_epochs']),
             index=dims['n_epochs'] - 1,
-            format_func=lambda x: epoch_options[x],
+            format_func=lambda x: epoch_options[x] if x < len(epoch_options) else f"Epoch {x}",
             key="stats_epoch",
         )
 
@@ -601,15 +589,8 @@ def _render_temporal_coverage(data: dict):
 
     coverage_matrix = coverage['coverage_matrix']
 
-    # Create heatmap
-    def _safe_epoch_label(i, d):
-        if d is not None and isinstance(d, str) and len(d) >= 10:
-            return d[:10]
-        elif d is not None and isinstance(d, str):
-            return d
-        return f"E{i}"
-
-    epoch_labels = [_safe_epoch_label(i, d) for i, d in enumerate(epoch_dates)] if epoch_dates else [f"E{i}" for i in range(dims['n_epochs'])]
+    # Create heatmap epoch labels
+    epoch_labels = [safe_date_label(epoch_dates, i, "E") for i in range(dims['n_epochs'])]
     transect_ids = data['transect_ids']
     if isinstance(transect_ids, np.ndarray):
         transect_ids = transect_ids.tolist()

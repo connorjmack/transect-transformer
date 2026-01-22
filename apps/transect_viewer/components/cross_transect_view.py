@@ -17,6 +17,7 @@ from apps.transect_viewer.utils.data_loader import (
     has_cliff_data,
     get_cliff_positions_by_id,
 )
+from apps.transect_viewer.utils.helpers import safe_date_label, safe_metadata_format
 
 
 def render_cross_transect():
@@ -34,12 +35,9 @@ def render_cross_transect():
     st.header("Cross-Transect View")
 
     # Show which epoch is being displayed
-    if is_cube and epoch_dates and epoch_idx < len(epoch_dates):
-        date_str = epoch_dates[epoch_idx]
-        date_label = date_str[:10] if isinstance(date_str, str) and len(date_str) >= 10 else str(date_str)
+    if is_cube:
+        date_label = safe_date_label(epoch_dates, epoch_idx, "Epoch")
         st.info(f"Showing data for epoch: {date_label}")
-    elif is_cube:
-        st.info(f"Showing data for epoch {epoch_idx}")
 
     # Map section
     _render_location_map(data, epoch_idx, is_cube)
@@ -275,21 +273,14 @@ def _render_multi_transect_comparison(data: dict, epoch_idx: int, is_cube: bool)
     for tid in selected_ids:
         transect = get_transect_by_id(data, tid, epoch_idx=epoch_idx)
         metadata = transect['metadata']
-        n_meta = len(metadata) if hasattr(metadata, '__len__') else 0
-
-        # Safe access to metadata fields with bounds checking
-        def safe_meta(idx, fmt=".2f"):
-            if idx < n_meta and not np.isnan(metadata[idx]):
-                return f"{metadata[idx]:{fmt}}"
-            return "N/A"
 
         summary_data.append({
             'ID': tid,
-            'Cliff Height (m)': safe_meta(0, ".2f"),
-            'Mean Slope (deg)': safe_meta(1, ".1f"),
-            'Max Slope (deg)': safe_meta(2, ".1f"),
-            'Length (m)': safe_meta(6, ".1f"),
-            'Orientation (deg)': safe_meta(5, ".1f"),
+            'Cliff Height (m)': safe_metadata_format(metadata, 0, ".2f"),
+            'Mean Slope (deg)': safe_metadata_format(metadata, 1, ".1f"),
+            'Max Slope (deg)': safe_metadata_format(metadata, 2, ".1f"),
+            'Length (m)': safe_metadata_format(metadata, 6, ".1f"),
+            'Orientation (deg)': safe_metadata_format(metadata, 5, ".1f"),
         })
 
     st.dataframe(pd.DataFrame(summary_data), use_container_width=True)

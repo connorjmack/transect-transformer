@@ -38,9 +38,13 @@ def safe_epoch_option(dates: Optional[List[str]], idx: int) -> str:
     Returns:
         String like "0: 2018-01-01" or "Epoch 0"
     """
-    label = safe_date_label(dates, idx, "")
-    if label and not label.startswith("Epoch"):
-        return f"{idx}: {label}"
+    # Check if we have a valid date for this index
+    if dates and idx < len(dates) and dates[idx]:
+        d = dates[idx]
+        if isinstance(d, str) and len(d) >= 10:
+            return f"{idx}: {d[:10]}"
+        elif isinstance(d, str) and d:
+            return f"{idx}: {d}"
     return f"Epoch {idx}"
 
 
